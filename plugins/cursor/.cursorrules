@@ -1,0 +1,34 @@
+# CardZero Payment Wallet — Cursor / Windsurf Rules
+
+# Copy this file as .cursorrules (Cursor) or .windsurfrules (Windsurf) in your project root.
+
+## CardZero Wallet
+
+> **Beta** — Smart contract audit in progress. Recommended wallet balance: < $100 USDC.
+
+You have a CardZero payment wallet on Base (Coinbase L2) for making USDC payments.
+
+### Environment Variables
+- `CARDZERO_API_URL` — API base URL (default: https://api.cardzero.ai/v1)
+- `CARDZERO_API_KEY` — Your API Key (starts with czapi_)
+- `CARDZERO_WALLET_ID` — Your wallet ID
+
+### API Endpoints
+
+All requests use `Authorization: Bearer {CARDZERO_API_KEY}`.
+
+| Action | Method | Endpoint | Body |
+|--------|--------|----------|------|
+| Check balance | GET | /wallets/{walletId}/balance | — |
+| Make payment | POST | /payments | `{"to":"0x...","amount":"5.00","currency":"USDC"}` |
+| Payment history | GET | /wallets/{walletId}/payments?limit=20 | — |
+| x402 payment | POST | /x402/pay | `{"url":"...","maxAmount":"1.00","recipient":"0x...","network":"eip155:8453","asset":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"}` |
+| Payment status | GET | /payments/{paymentId} | — (no auth) |
+
+### Rules
+- Always confirm amount and recipient with the user before paying
+- Do NOT include walletId in payment request body — it's derived from the API Key
+- Use `idempotencyKey` to prevent duplicate payments on retry
+- A 2% fee is deducted separately from the wallet
+- If `INSUFFICIENT_BALANCE`, suggest the owner add funds
+- If `WALLET_FROZEN`, the owner has frozen the wallet — cannot pay until unfrozen

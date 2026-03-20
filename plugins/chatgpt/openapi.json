@@ -1,0 +1,206 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "CardZero Agent Wallet",
+    "version": "1.1.0",
+    "description": "Make USDC payments on Base from your AI Agent wallet."
+  },
+  "servers": [
+    { "url": "https://api.cardzero.ai/v1" }
+  ],
+  "paths": {
+    "/wallets/{walletId}/balance": {
+      "get": {
+        "operationId": "getBalance",
+        "summary": "Check USDC balance",
+        "parameters": [
+          { "name": "walletId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Balance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "walletId": { "type": "string" },
+                    "balance": { "type": "string" },
+                    "currency": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/payments": {
+      "post": {
+        "operationId": "makePayment",
+        "summary": "Send USDC payment",
+        "description": "Wallet ID is derived from API Key. Do not include walletId in body.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["to", "amount", "currency"],
+                "properties": {
+                  "to": { "type": "string", "description": "Recipient 0x address" },
+                  "amount": { "type": "string", "description": "USDC amount" },
+                  "currency": { "type": "string", "enum": ["USDC"] },
+                  "memo": { "type": "string" },
+                  "idempotencyKey": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Payment confirmed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "paymentId": { "type": "string" },
+                    "status": { "type": "string" },
+                    "txHash": { "type": "string" },
+                    "remainingBalance": { "type": "string" },
+                    "amount": { "type": "string" },
+                    "to": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/wallets/{walletId}/payments": {
+      "get": {
+        "operationId": "listPayments",
+        "summary": "View payment history",
+        "parameters": [
+          { "name": "walletId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Payment list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "payments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "to_address": { "type": "string" },
+                          "amount": { "type": "string" },
+                          "status": { "type": "string" },
+                          "tx_hash": { "type": "string" },
+                          "created_at": { "type": "integer" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/x402/pay": {
+      "post": {
+        "operationId": "x402Pay",
+        "summary": "Pay for x402-protected HTTP resource",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["url", "maxAmount", "recipient", "network", "asset"],
+                "properties": {
+                  "url": { "type": "string" },
+                  "maxAmount": { "type": "string" },
+                  "recipient": { "type": "string" },
+                  "network": { "type": "string" },
+                  "asset": { "type": "string" },
+                  "idempotencyKey": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "x402 payment confirmed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "paymentId": { "type": "string" },
+                    "txHash": { "type": "string" },
+                    "paymentHeader": { "type": "string" },
+                    "amount": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/payments/{paymentId}": {
+      "get": {
+        "operationId": "getPayment",
+        "summary": "Check payment status",
+        "parameters": [
+          { "name": "paymentId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Payment details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "to_address": { "type": "string" },
+                    "amount": { "type": "string" },
+                    "status": { "type": "string" },
+                    "tx_hash": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerApiKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "CardZero API Key (czapi_prefix_secret)"
+      }
+    }
+  },
+  "security": [
+    { "BearerApiKey": [] }
+  ]
+}

@@ -1,5 +1,11 @@
 # CardZero
 
+[![ClawHub](https://img.shields.io/badge/ClawHub-cardzero%40v1.3.0-blue)](https://clawhub.ai/mrocker/cardzero)
+[![npm](https://img.shields.io/npm/v/cardzero-mcp)](https://www.npmjs.com/package/cardzero-mcp)
+[![Base](https://img.shields.io/badge/Chain-Base%20L2-0052FF)](https://base.org)
+[![x402](https://img.shields.io/badge/Protocol-x402-green)](https://x402.org)
+[![USDC](https://img.shields.io/badge/Currency-USDC-2775CA)](https://www.circle.com/usdc)
+
 **The first universal payment wallet for AI Agents.**
 
 > **Beta** — Smart contract audit in progress. Recommended wallet balance: < $100 USDC.
@@ -51,7 +57,15 @@ Import [`plugins/chatgpt/openapi.json`](plugins/chatgpt/openapi.json) as a Custo
 
 Copy [`plugins/cursor/.cursorrules`](plugins/cursor/.cursorrules) to your project root as `.cursorrules` (Cursor) or `.windsurfrules` (Windsurf).
 
-### 5. Any Platform
+### 5. MCP Server (Claude Desktop, Cursor, VS Code)
+
+```bash
+npx -y cardzero-mcp
+```
+
+Configure with your API Key and Wallet ID. See [`plugins/mcp/README.md`](plugins/mcp/README.md) for setup instructions for each platform.
+
+### 6. Any Platform
 
 CardZero is a standard REST API. If your Agent can make HTTP requests, it can use CardZero. See the [API endpoints](#api-at-a-glance) below or the full [OpenAPI spec](openapi.yaml).
 
@@ -92,10 +106,13 @@ See [`examples/curl.sh`](examples/curl.sh) for curl commands covering the core A
 ## Links
 
 - **Dashboard:** [cardzero.ai](https://cardzero.ai)
+- **MCP Server:** [npmjs.com/package/cardzero-mcp](https://www.npmjs.com/package/cardzero-mcp)
+- **ClawHub SKILL:** [clawhub.ai/mrocker/cardzero](https://clawhub.ai/mrocker/cardzero)
 - **API Docs:** [cardzero.ai/docs/api](https://cardzero.ai/docs/api)
 - **Getting Started:** [cardzero.ai/docs/getting-started](https://cardzero.ai/docs/getting-started)
 - **OpenAPI Spec:** [`openapi.yaml`](openapi.yaml)
 - **FAQ:** [cardzero.ai/docs/faq](https://cardzero.ai/docs/faq)
+- **x402 Protocol:** [x402.org](https://x402.org)
 
 ## License
 

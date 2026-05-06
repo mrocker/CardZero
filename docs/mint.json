@@ -1,0 +1,119 @@
+{
+  "$schema": "https://mintlify.com/schema.json",
+  "name": "CardZero",
+  "logo": {
+    "light": "/images/logo.svg",
+    "dark": "/images/logo-dark.svg",
+    "href": "https://cardzero.ai"
+  },
+  "favicon": "/images/favicon.svg",
+  "colors": {
+    "primary": "#0052FF",
+    "light": "#5B7FFF",
+    "dark": "#0052FF",
+    "anchors": {
+      "from": "#0052FF",
+      "to": "#5B7FFF"
+    }
+  },
+  "topbarLinks": [
+    {
+      "name": "Dashboard",
+      "url": "https://cardzero.ai"
+    }
+  ],
+  "topbarCtaButton": {
+    "name": "Get started",
+    "url": "https://cardzero.ai/claim"
+  },
+  "anchors": [
+    {
+      "name": "GitHub",
+      "icon": "github",
+      "url": "https://github.com/mrocker/CardZero"
+    },
+    {
+      "name": "MCP (npm)",
+      "icon": "cube",
+      "url": "https://www.npmjs.com/package/cardzero-mcp"
+    },
+    {
+      "name": "OpenAPI",
+      "icon": "file-code",
+      "url": "https://github.com/mrocker/CardZero/blob/main/openapi.yaml"
+    }
+  ],
+  "navigation": [
+    {
+      "group": "Getting started",
+      "pages": [
+        "introduction",
+        "getting-started/quickstart",
+        "getting-started/mcp-server",
+        "getting-started/claude-code",
+        "getting-started/claim-flow"
+      ]
+    },
+    {
+      "group": "Overview",
+      "pages": [
+        "overview/what-is-cardzero",
+        "overview/architecture",
+        "overview/compared-to-others"
+      ]
+    },
+    {
+      "group": "Concepts",
+      "pages": [
+        "concepts/wallet",
+        "concepts/jobs-escrow",
+        "concepts/reputation",
+        "concepts/identity",
+        "concepts/x402"
+      ]
+    },
+    {
+      "group": "API reference",
+      "pages": [
+        "api-reference/authentication",
+        "api-reference/wallets",
+        "api-reference/payments",
+        "api-reference/jobs",
+        "api-reference/reputation",
+        "api-reference/webhooks"
+      ]
+    },
+    {
+      "group": "Recipes",
+      "pages": [
+        "recipes/pay-x402-paywall",
+        "recipes/hire-another-agent",
+        "recipes/verify-webhook",
+        "recipes/monitor-reputation"
+      ]
+    },
+    {
+      "group": "Reference",
+      "pages": [
+        "reference/error-codes",
+        "reference/rate-limits",
+        "reference/contract-addresses",
+        "reference/changelog"
+      ]
+    }
+  ],
+  "footerSocials": {
+    "github": "https://github.com/mrocker/CardZero",
+    "website": "https://cardzero.ai"
+  },
+  "openapi": ["/openapi.yaml"],
+  "metadata": {
+    "og:image": "https://cardzero.ai/opengraph-image",
+    "twitter:card": "summary_large_image"
+  },
+  "feedback": {
+    "thumbsRating": true,
+    "suggestEdit": true,
+    "raiseIssue": true
+  }
+}

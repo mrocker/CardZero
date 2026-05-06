@@ -1,0 +1,218 @@
+---
+title: Wallets
+description: "Create, claim, configure, freeze, rename, and rotate keys."
+---
+
+Base URL: `https://api.cardzero.ai/v1`
+
+## Create wallet
+
+<ParamField path="POST /wallets" />
+
+No authentication. Rate-limited at 50/hour per IP.
+
+**Body:**
+
+```json
+{
+  "name": "My Agent",
+  "version": "v3"
+}
+```
+
+| Field | Type | Required | Default |
+| --- | --- | --- | --- |
+| `name` | string | no | auto-generated |
+| `version` | "v2" \| "v3" | no | "v2" |
+
+**Response 201:**
+
+```json
+{
+  "id": "wallet_7370ee785775",
+  "chainAddress": "0xa1f2…70D0",
+  "claimKey": "czk_a1b2c3d4e5f6g7h8_…",
+  "name": "My Agent",
+  "status": "pending",
+  "version": "v3"
+}
+```
+
+The wallet is **lazy-deployed**: address is real (CREATE2-deterministic), but
+no contract on-chain yet. Owner claims to deploy.
+
+## Claim wallet
+
+<ParamField path="POST /auth/claim" />
+
+No authentication (claim key serves as proof). Rate-limited at 10/hour per IP.
+
+**New user (creates account):**
+
+```json
+{
+  "claimKey": "czk_a1b2c3d4_…",
+  "username": "myname",
+  "password": "MyStrongPass123!"
+}
+```
+
+**Existing user (attaches wallet to logged-in account):**
+
+```json
+{
+  "claimKey": "czk_a1b2c3d4_…"
+}
+```
+(Send with `Authorization: Bearer <jwt>` header.)
+
+**Response 201:**
+
+```json
+{
+  "token": "eyJ…",
+  "userId": "user_…",
+  "agentConfig": {
+    "apiKey": "czapi_a1b2c3d4_…",
+    "walletId": "wallet_7370ee785775",
+    "summary": "== CardZero Wallet Summary ==\n…"
+  }
+}
+```
+
+The `summary` is a multi-line block the Owner can paste back to the agent.
+
+## List wallets
+
+<ParamField path="GET /wallets" />
+
+JWT required.
+
+**Response 200:**
+
+```json
+{
+  "wallets": [
+    {
+      "id": "wallet_…",
+      "chain_address": "0x…",
+      "name": "My Agent",
+      "status": "active",
+      "frozen": 0,
+      "tx_limit": "1.0",
+      "daily_limit": "5.0",
+      "expires_at": null,
+      "wallet_version": "v3",
+      "created_at": 1715000000
+    }
+  ]
+}
+```
+
+## Get wallet
+
+<ParamField path="GET /wallets/:id" />
+
+JWT + ownership.
+
+Returns the same shape as the list endpoint.
+
+## Get balance
+
+<ParamField path="GET /wallets/:id/balance" />
+
+JWT or API Key.
+
+**Response 200:**
+
+```json
+{
+  "walletId": "wallet_…",
+  "balance": "10.50",
+  "currency": "USDC"
+}
+```
+
+## Update spending rules
+
+<ParamField path="PATCH /wallets/:id/config" />
+
+JWT + ownership.
+
+**Body** (all fields optional):
+
+```json
+{
+  "txLimit": "1.0",
+  "dailyLimit": "5.0",
+  "whitelist": ["0x1234…", "0x5678…"],
+  "expiresAt": 1735689600
+}
+```
+
+Pass `"0"` to remove a limit. Pass `[]` to clear the whitelist.
+
+## Rename
+
+<ParamField path="PATCH /wallets/:id/name" />
+
+JWT + ownership.
+
+```json
+{ "name": "New name" }
+```
+
+Limits: 1–50 chars.
+
+## Freeze / unfreeze
+
+<ParamField path="POST /wallets/:id/freeze" />
+<ParamField path="POST /wallets/:id/unfreeze" />
+
+JWT + ownership. Both block until on-chain confirmed (~1–2s).
+
+When frozen, all payments + Job operations revert with `WALLET_FROZEN`.
+
+## Get / rotate API key
+
+<ParamField path="GET /wallets/:id/api-key" />
+<ParamField path="POST /wallets/:id/api-key/rotate" />
+
+JWT + ownership. `GET` returns the current plaintext key (decrypts from DB).
+`POST /rotate` invalidates the current key and returns a new one.
+
+```json
+{
+  "apiKey": "czapi_…",
+  "walletId": "wallet_…"
+}
+```
+
+## Get / rotate webhook secret
+
+<ParamField path="GET /wallets/:id/webhook-secret" />
+<ParamField path="POST /wallets/:id/webhook-secret/rotate" />
+
+JWT + ownership. The webhook secret is per-wallet; used as HMAC-SHA256 key
+for outgoing webhook signatures.
+
+```json
+{
+  "webhookSecret": "whsec_…",
+  "walletId": "wallet_…"
+}
+```
+
+See [Verify webhooks](/recipes/verify-webhook) for how to use it.
+
+## Errors
+
+| Code | HTTP | When |
+| --- | --- | --- |
+| `INVALID_VERSION` | 400 | `version` not "v2" or "v3" |
+| `V3_NOT_CONFIGURED` | 503 | V3 factory address missing in server env |
+| `WALLET_NOT_FOUND` | 404 | bad wallet ID |
+| `FORBIDDEN` | 403 | wallet ID doesn't belong to JWT user |
+| `WALLET_NOT_ACTIVE` | 400 | wallet is in "pending" status (not claimed yet) |
+| `INVALID_NAME` | 400 | name length out of [1,50] |
+| `RATE_LIMITED` | 429 | exceeded `walletCreateLimiter` |

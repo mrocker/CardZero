@@ -1,0 +1,231 @@
+---
+title: Verify a webhook signature
+description: "HMAC-SHA256 in 5 languages. Don't trust the source IP — verify."
+---
+
+CardZero signs every webhook with HMAC-SHA256 over the **raw request body**,
+using your wallet's per-wallet `webhook_secret`. Verifying is a few lines
+of code.
+
+## Get your secret
+
+```bash
+curl https://api.cardzero.ai/v1/wallets/wallet_…/webhook-secret \
+  -H "Authorization: Bearer <jwt>"
+```
+
+Save the `webhookSecret` value (starts with `whsec_`) in your server's secrets.
+
+If you ever leak it, rotate:
+
+```bash
+curl -X POST https://api.cardzero.ai/v1/wallets/wallet_…/webhook-secret/rotate \
+  -H "Authorization: Bearer <jwt>"
+```
+
+## Headers we send
+
+```
+X-CardZero-Event:      job_completed
+X-CardZero-Signature:  sha256=a1b2c3d4...
+User-Agent:            CardZero-Webhook/1.0
+Content-Type:          application/json
+```
+
+## Critical: use the raw body
+
+HMAC is over **bytes**, not parsed JSON. If your framework auto-parses, you
+must access the original raw bytes for verification. Common pitfalls:
+
+- ❌ `JSON.stringify(req.body)` — doesn't match the original bytes (key order, whitespace).
+- ✅ Use `express.raw()` middleware OR read `req.text()` in Next.js.
+
+## Examples
+
+<Tabs>
+  <Tab title="Node.js / Express">
+    ```typescript
+    import express from "express";
+    import { createHmac, timingSafeEqual } from "crypto";
+
+    const app = express();
+
+    // CRITICAL: raw body parser BEFORE any json() middleware
+    app.use("/webhooks/cardzero", express.raw({ type: "application/json" }));
+
+    app.post("/webhooks/cardzero", (req, res) => {
+      const rawBody = (req.body as Buffer).toString("utf8");
+      const sigHeader = req.headers["x-cardzero-signature"] as string;
+
+      if (!verify(rawBody, sigHeader, process.env.WEBHOOK_SECRET!)) {
+        return res.status(401).send("invalid signature");
+      }
+
+      const event = JSON.parse(rawBody);
+      console.log("Got CardZero event:", event.type, event.jobId);
+      // ... process event ...
+      res.status(200).send("ok");
+    });
+
+    function verify(body: string, header: string, secret: string): boolean {
+      const expected = createHmac("sha256", secret).update(body).digest("hex");
+      const received = header.replace(/^sha256=/, "");
+      if (expected.length !== received.length) return false;
+      return timingSafeEqual(Buffer.from(expected), Buffer.from(received));
+    }
+    ```
+  </Tab>
+
+  <Tab title="Next.js (App Router)">
+    ```typescript
+    // app/api/webhooks/cardzero/route.ts
+    import { createHmac, timingSafeEqual } from "crypto";
+
+    export async function POST(req: Request) {
+      const rawBody = await req.text();
+      const sigHeader = req.headers.get("x-cardzero-signature") || "";
+
+      if (!verify(rawBody, sigHeader, process.env.WEBHOOK_SECRET!)) {
+        return new Response("invalid signature", { status: 401 });
+      }
+
+      const event = JSON.parse(rawBody);
+      // ... process ...
+      return new Response("ok", { status: 200 });
+    }
+
+    function verify(body: string, header: string, secret: string): boolean {
+      const expected = createHmac("sha256", secret).update(body).digest("hex");
+      const received = header.replace(/^sha256=/, "");
+      if (expected.length !== received.length) return false;
+      return timingSafeEqual(Buffer.from(expected), Buffer.from(received));
+    }
+    ```
+  </Tab>
+
+  <Tab title="Python">
+    ```python
+    import hmac
+    import hashlib
+    from flask import Flask, request
+
+    app = Flask(__name__)
+    WEBHOOK_SECRET = os.environ["CARDZERO_WEBHOOK_SECRET"]
+
+    @app.route("/webhooks/cardzero", methods=["POST"])
+    def webhook():
+        raw_body = request.get_data()  # bytes
+        signature = request.headers.get("X-CardZero-Signature", "")
+
+        expected = hmac.new(
+            WEBHOOK_SECRET.encode(),
+            raw_body,
+            hashlib.sha256
+        ).hexdigest()
+
+        received = signature.replace("sha256=", "", 1)
+        if not hmac.compare_digest(expected, received):
+            return "invalid signature", 401
+
+        event = json.loads(raw_body)
+        # ... process ...
+        return "ok", 200
+    ```
+  </Tab>
+
+  <Tab title="Go">
+    ```go
+    package main
+
+    import (
+        "crypto/hmac"
+        "crypto/sha256"
+        "encoding/hex"
+        "io"
+        "net/http"
+        "os"
+        "strings"
+    )
+
+    var secret = os.Getenv("CARDZERO_WEBHOOK_SECRET")
+
+    func webhookHandler(w http.ResponseWriter, r *http.Request) {
+        rawBody, _ := io.ReadAll(r.Body)
+
+        sigHeader := r.Header.Get("X-CardZero-Signature")
+        received := strings.TrimPrefix(sigHeader, "sha256=")
+
+        mac := hmac.New(sha256.New, []byte(secret))
+        mac.Write(rawBody)
+        expected := hex.EncodeToString(mac.Sum(nil))
+
+        if !hmac.Equal([]byte(expected), []byte(received)) {
+            http.Error(w, "invalid signature", 401)
+            return
+        }
+
+        // ... process rawBody as JSON ...
+        w.WriteHeader(http.StatusOK)
+    }
+    ```
+  </Tab>
+
+  <Tab title="Ruby / Rails">
+    ```ruby
+    require 'openssl'
+
+    class WebhooksController < ApplicationController
+      skip_before_action :verify_authenticity_token
+
+      def cardzero
+        raw_body = request.raw_post
+        sig_header = request.headers['X-CardZero-Signature']
+
+        expected = OpenSSL::HMAC.hexdigest('SHA256', ENV['WEBHOOK_SECRET'], raw_body)
+        received = sig_header.sub('sha256=', '')
+
+        unless ActiveSupport::SecurityUtils.secure_compare(expected, received)
+          render plain: 'invalid signature', status: 401
+          return
+        end
+
+        event = JSON.parse(raw_body)
+        # ... process ...
+        head :ok
+      end
+    end
+    ```
+  </Tab>
+</Tabs>
+
+## What to do after verifying
+
+Process the event idempotently. Each event has a stable `jobId + type` —
+de-dup using that. Don't process the same `(jobId, type)` twice.
+
+Example dedup:
+
+```typescript
+const dedupKey = `${event.jobId}-${event.type}`;
+const wasProcessed = await redis.set(`processed:${dedupKey}`, "1", "EX", 86400, "NX");
+if (!wasProcessed) {
+  console.log("Duplicate event, skipping:", dedupKey);
+  return res.status(200).send("ok");
+}
+// ... actually do the work ...
+```
+
+## Test before going live
+
+Manually trigger a webhook by causing a state change (create a Job, fund
+it). Check your endpoint logs to confirm:
+
+1. Signature verifies ✅
+2. Event JSON parses ✅
+3. Your handler runs ✅
+4. Returns HTTP 2xx ✅
+
+CardZero will retry up to 3 times with backoff. Failed deliveries are
+logged in your Owner dashboard.
+
+[Webhook API reference →](/api-reference/webhooks)

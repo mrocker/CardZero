@@ -1,0 +1,169 @@
+---
+title: Quickstart
+description: "Get your first agent transacting in 5 minutes — wallet, claim, fund, pay."
+---
+
+By the end of this page you'll have:
+
+1. A CardZero wallet (smart contract on Base mainnet)
+2. A human Owner account that controls spending rules
+3. An API Key your agent uses to pay
+4. A first 1 USDC test payment confirmed on-chain
+
+Total time: **about 5 minutes** + waiting for USDC to arrive.
+
+## Step 1 — Create the wallet (agent does this)
+
+Hit the API. No authentication needed; this is the only unauthenticated write
+endpoint and it's heavily rate-limited.
+
+```bash
+curl -X POST https://api.cardzero.ai/v1/wallets \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My first agent",
+    "version": "v3"
+  }'
+```
+
+<Note>
+**Pick the right version.** `v2` is payments-only (USDC transfer + x402).
+`v3` adds A2A Job escrow (ERC-8183). You can't upgrade later — pick at
+creation. Default is v2; we recommend `v3` for most new agents.
+</Note>
+
+**Response** (HTTP 201):
+
+```json
+{
+  "id": "wallet_7370ee785775",
+  "chainAddress": "0xa1f2…70D0",
+  "claimKey": "czk_a1b2c3d4e5f6g7h8_i9j0k1l2…",
+  "name": "My first agent",
+  "status": "pending",
+  "version": "v3"
+}
+```
+
+Save these:
+- **`id`** — your `CARDZERO_WALLET_ID`
+- **`chainAddress`** — where to send USDC
+- **`claimKey`** — give this to your human Owner. **One-time, 7-day expiry.**
+
+The wallet is **lazy-deployed**: no contract on-chain yet, address is CREATE2-deterministic.
+The contract gets deployed (and gas paid) when the Owner claims.
+
+## Step 2 — Claim the wallet (Owner does this)
+
+The agent tells the Owner:
+
+> Hi! I created a CardZero wallet. To activate it:
+> 1. Go to https://cardzero.ai/claim
+> 2. Enter this claim key: `czk_a1b2c3d4e5f6g7h8_…`
+> 3. Set up a username and password
+> 4. Send some USDC to `0xa1f2…70D0`
+>
+> When you're done, paste back the **API Key** the dashboard gives you.
+
+The dashboard at `/claim`:
+- Validates the claim key (checks expiry, not-already-used)
+- Deploys the smart contract (~$0.0001 gas, paid by CardZero)
+- Creates the Owner account
+- Generates an API Key (`czapi_…`)
+- Auto-grants a 30-day session key (the agent never sees this — handled internally)
+
+## Step 3 — Fund the wallet
+
+Three ways to send USDC:
+
+<Tabs>
+  <Tab title="Connect a wallet (recommended)">
+    On the wallet detail page, click **Connect wallet** → MetaMask / Coinbase
+    Wallet / Rainbow → enter amount → confirm.
+
+    Uses the user's existing browser wallet. Doesn't expose CardZero RPC
+    credentials. Best UX.
+  </Tab>
+  <Tab title="Coinbase Onramp (fiat)">
+    Click **Buy with USD/EUR/GBP** → Coinbase Onramp opens → KYC if first time → buy.
+
+    Funds land directly in the wallet's chain address. Fees vary by region.
+  </Tab>
+  <Tab title="Direct transfer">
+    Send USDC on Base to the wallet's chain address from any source (exchange withdrawal,
+    another wallet, anywhere).
+
+    USDC contract: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`
+  </Tab>
+</Tabs>
+
+## Step 4 — Set spending rules (optional but recommended)
+
+In the dashboard wallet detail page, configure:
+
+| Rule | Example | Effect |
+| --- | --- | --- |
+| Per-tx limit | 5 USDC | Single payment can't exceed this |
+| Daily limit | 50 USDC | All payments combined per UTC day |
+| Address whitelist | `[0x1234…, 0x5678…]` | Agent can only pay these addresses |
+| Expiry | 2026-12-31 | Agent loses ability to pay after this date |
+| Freeze | toggle | Stop all payments instantly |
+
+Rules are enforced **on-chain**, in the smart contract. Even CardZero can't bypass them.
+
+## Step 5 — First payment (agent does this)
+
+The Owner gave you an API key like `czapi_a1b2c3d4_secretsecretsecretsecret…`.
+Set environment variables:
+
+```bash
+export CARDZERO_API_KEY="czapi_a1b2c3d4_…"
+export CARDZERO_WALLET_ID="wallet_7370ee785775"
+```
+
+Send a test payment (1 USDC to a self-controlled address):
+
+```bash
+curl -X POST https://api.cardzero.ai/v1/payments \
+  -H "Authorization: Bearer $CARDZERO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "to": "0xYourTestAddress…",
+    "amount": "1.0",
+    "currency": "USDC",
+    "memo": "First test"
+  }'
+```
+
+**Response** (HTTP 200 once on-chain):
+
+```json
+{
+  "id": "pay_abc123def456",
+  "txHash": "0x…",
+  "status": "confirmed",
+  "amount": "1.0",
+  "feeAmount": "0.02",
+  "to": "0xYourTestAddress…"
+}
+```
+
+Click `txHash` on [Basescan](https://basescan.org) — you'll see the transfer plus
+a 0.02 USDC fee transfer to CardZero treasury.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Hire another agent" icon="handshake" href="/recipes/hire-another-agent">
+    Move from "agent pays" to "agent hires" — full ERC-8183 Job lifecycle.
+  </Card>
+  <Card title="Pay a paywalled API" icon="globe" href="/recipes/pay-x402-paywall">
+    HTTP 402 → automatic USDC payment → retry → response.
+  </Card>
+  <Card title="Set up webhooks" icon="webhook" href="/recipes/verify-webhook">
+    Get pinged when jobs change state. HMAC-SHA256 verification.
+  </Card>
+  <Card title="Browse the API" icon="code" href="/api-reference/wallets">
+    Full reference for every endpoint.
+  </Card>
+</CardGroup>

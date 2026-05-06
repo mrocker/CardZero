@@ -1,0 +1,139 @@
+---
+title: Error codes
+description: "Every error CardZero can return, what it means, and how to recover."
+---
+
+CardZero errors have a stable `code` (machine-readable) plus a `message` (human).
+HTTP status indicates the category. Check `code` for programmatic dispatch.
+
+## Format
+
+```json
+{
+  "error": "INSUFFICIENT_BALANCE",
+  "message": "Wallet balance too low for this payment"
+}
+```
+
+## Authentication errors (401, 403)
+
+| Code | When | Recover |
+| --- | --- | --- |
+| `UNAUTHORIZED` | Missing / malformed `Authorization` header | Check format `Bearer <token>` |
+| `INVALID_API_KEY` | API key not recognized or revoked | Get new key from Owner |
+| `API_KEY_NOT_BOUND_TO_WALLET` | API key exists but has no wallet | Re-issue via /api-key/rotate |
+| `FORBIDDEN` | Action not allowed for this auth | Check ownership / role |
+
+## Validation errors (400)
+
+| Code | When | Recover |
+| --- | --- | --- |
+| `INVALID_VERSION` | wallet version not "v2" or "v3" | Use a valid value |
+| `INVALID_AMOUNT` | amount format wrong or ≤ 0 | Use decimal string, e.g. "1.0" |
+| `INVALID_ADDRESS` | EVM address malformed | 0x + 40 hex chars |
+| `INVALID_BUDGET` | budgetUsdc unparseable | BigInt-safe string in microUSDC |
+| `INVALID_TITLE` | title > 200 chars or wrong type | Shorten |
+| `INVALID_DESCRIPTION` | description > 2000 chars | Shorten |
+| `INVALID_EVALUATOR_RULE` | rule.type not in {manual, json_schema, http_check} | Use valid type |
+| `INVALID_HASH` | contentHash not 32-byte hex | keccak256 + 0x prefix + 64 hex chars |
+| `INVALID_NAME` | name length out of [1,50] | Trim |
+| `INVALID_USERNAME` | username out of [3,20] chars | Adjust |
+| `EXPIRY_TOO_SHORT` | expiredAt < now + 86400 | Set ≥ 1 day in future |
+| `MISSING_*` | Required field absent | Add the field |
+
+## Resource errors (404, 409)
+
+| Code | When | Recover |
+| --- | --- | --- |
+| `WALLET_NOT_FOUND` | wallet ID doesn't exist | Check ID |
+| `JOB_NOT_FOUND` | jobId doesn't exist | Check ID |
+| `PAYMENT_NOT_FOUND` | paymentId doesn't exist | Check ID |
+| `USER_NOT_FOUND` | user ID invalid | Check ID |
+| `WALLET_BUSY` | Another payment in flight for same wallet | Retry in a few seconds |
+| `JOB_BUSY` | Another transition in flight for same Job | Retry in a few seconds |
+| `WALLET_NOT_ACTIVE` | Wallet still in "pending" state | Owner must claim first |
+| `CLAIM_IN_PROGRESS` | Concurrent claim attempt | Wait 5 minutes; auto-recovers |
+| `CLAIM_KEY_INVALID` | Bad / expired / used key | Generate a new claim key (POST /wallets) |
+| `IDEMPOTENCY_INCOMPLETE` | Same idempotencyKey used; previous attempt mid-failed | Manual recovery; contact support |
+
+## Spending policy errors (400)
+
+Enforced **on-chain**; no API workaround.
+
+| Code | When | Recover |
+| --- | --- | --- |
+| `INSUFFICIENT_BALANCE` | Wallet doesn't have enough USDC | Owner funds wallet |
+| `WALLET_FROZEN` | Owner froze the wallet | Owner unfreezes |
+| `TX_LIMIT_EXCEEDED` | Single payment > per-tx limit | Split payment or Owner raises limit |
+| `DAILY_LIMIT_EXCEEDED` | Total today > daily limit | Wait for UTC midnight or Owner raises limit |
+| `NOT_IN_WHITELIST` | Recipient not in whitelist (when set) | Owner adds to whitelist |
+| `WALLET_EXPIRED` | Past wallet's expiresAt | Owner extends expiry |
+
+## Job-specific errors (400, 403)
+
+| Code | When | Recover |
+| --- | --- | --- |
+| `CLIENT_NOT_FOUND` | API key not bound to a wallet | Re-issue API key |
+| `CLIENT_NOT_ACTIVE` | Client wallet not yet claimed | Claim first |
+| `NOT_CLIENT` | API key's wallet ≠ Job's client | Use correct API key |
+| `NOT_PROVIDER` | API key's wallet ≠ Job's provider | Use correct API key |
+| `EXTERNAL_PROVIDER` | Provider must submit on-chain directly | Use Provider's own infra |
+| `INVALID_STATUS` | Job state doesn't allow this action | Check Job state |
+| `NOT_YET_EXPIRED` | claimRefund called too early | Wait until expiredAt |
+| `SOFT_START_CAP` | Beta budget cap (max $100 USDC) | Wait for cap removal |
+| `SELF_JOB` | Client and Provider are same wallet | Use a different Provider |
+
+## Chain errors (502)
+
+| Code | When | Recover |
+| --- | --- | --- |
+| `CHAIN_CREATE_FAILED` | On-chain createJob reverted | Investigate via Basescan; DB row already rolled back, retry safe |
+| `NOT_ONCHAIN` | DB has Job, but chain doesn't (rare race) | Manual cleanup; contact support |
+| `RPC_TIMEOUT` | Blockchain RPC didn't respond in 60s | Retry; CardZero falls back to backup RPC |
+
+## Configuration errors (500, 503)
+
+| Code | When | Recover |
+| --- | --- | --- |
+| `V3_NOT_CONFIGURED` | V3 factory address missing in server env | Server-side; report to ops |
+| `EVALUATOR_UNCONFIGURED` | Evaluator EOA missing | Server-side |
+| `INTERNAL` | Generic 500 | Retry; report if persistent |
+
+## Rate limiting (429)
+
+| Code | When | Recover |
+| --- | --- | --- |
+| `RATE_LIMITED` | Exceeded rate limiter | Wait for window reset (`Retry-After` header) |
+
+## Webhook errors
+
+| Code | When | Recover |
+| --- | --- | --- |
+| `WEBHOOK_NO_SECRET` | Wallet has no webhook_secret | Hit `GET /webhook-secret` once to lazy-generate |
+
+## Onramp errors
+
+| Code | When | Recover |
+| --- | --- | --- |
+| `CDP_NOT_CONFIGURED` | Coinbase Onramp credentials missing | Server-side |
+| `INVALID_WALLET` | Wallet doesn't belong to user | Check ownership |
+
+## Decision tree for callers
+
+```
+HTTP 401/403  →  re-auth
+HTTP 400 + INVALID_*  →  fix request
+HTTP 400 + spending policy  →  Owner action needed
+HTTP 404  →  check IDs
+HTTP 409  →  retry with backoff (idempotency-safe)
+HTTP 429  →  honor Retry-After
+HTTP 502/503  →  retry with backoff (downstream issue)
+HTTP 500  →  retry once, then escalate
+```
+
+## When in doubt
+
+Check the response body's `message` for human-readable detail. Most messages
+include the specific value that failed validation. If the error doesn't
+match anything above, it might be a new code — file an issue at
+[github.com/mrocker/CardZero](https://github.com/mrocker/CardZero/issues).

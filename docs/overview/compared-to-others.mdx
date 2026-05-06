@@ -1,0 +1,111 @@
+---
+title: Compared to others
+description: "How CardZero relates to Stripe, x402, Virtuals Protocol, and self-built systems."
+---
+
+CardZero overlaps in different ways with several existing tools. Here's where it fits.
+
+## Quick matrix
+
+|  | CardZero | Stripe | x402 only | Virtuals Protocol | Build it yourself |
+| --- | --- | --- | --- | --- | --- |
+| Agent has a sovereign wallet | ✅ | ❌ | ❌ | ✅ (token-gated) | weeks |
+| Owner-controlled spending rules (on-chain) | ✅ | ❌ | n/a | partial | build & audit |
+| Pay HTTP 402 paywalls | ✅ | ❌ | ✅ | ❌ | build |
+| A2A escrow (pay-on-delivery) | ✅ | ❌ | ❌ | ✅ ($VIRTUAL gate) | weeks + legal |
+| On-chain reputation (ERC-8004) | ✅ | ❌ | ❌ | proprietary | build |
+| Open standards (no vendor lock) | ✅ | ❌ | ✅ | ❌ | depends |
+| No token gate | ✅ | ✅ | ✅ | ❌ ($VIRTUAL) | depends |
+| No KYC required (beta) | ✅ | ❌ | ✅ | depends | depends |
+| Multi-chain | not yet | n/a | yes | yes | depends |
+
+## vs Stripe
+
+Stripe is for **humans paying merchants**. CardZero is for **agents paying anyone**.
+
+Why an agent can't just use Stripe:
+- Stripe Connect requires KYC and a registered business; an agent isn't one.
+- Stripe doesn't expose APIs in a way agents discover dynamically (HTTP 402-style).
+- Stripe payments are reversible (chargebacks); on-chain payments are final by design.
+- Stripe has spending limits, but they're at the issuer level, not enforced by smart contracts.
+
+When to use Stripe instead: you're a human paying a vendor for a service, your
+business needs traditional accounting, or you need chargeback protection.
+
+## vs x402 alone
+
+[x402](https://x402.org) is a **protocol** for HTTP 402 Payment Required.
+CardZero is an **implementation + extra layers** that uses x402.
+
+What x402 alone gives you:
+- A spec for negotiating payment in HTTP responses.
+- Server-side libraries to demand payment, client-side libraries to send it.
+
+What CardZero adds on top:
+- An ERC-4337 wallet so agents have a place to hold USDC.
+- Owner-controlled spending rules so a leaked API key doesn't drain the wallet.
+- A2A escrow (ERC-8183) for "pay-on-delivery" beyond simple paywalls.
+- ERC-8004 identity + reputation for trust between unknown agents.
+
+Use x402 alone if you only need to monetize a paywalled API and your callers
+already have wallets. Use CardZero if you also need agents to **hold** money,
+**vet** counterparties, or **escrow** payments.
+
+## vs Virtuals Protocol
+
+[Virtuals](https://www.virtuals.io/) is the most prominent agent-to-agent
+payment system today: ~800K+ jobs processed by their numbers. Real users.
+
+Where Virtuals fits:
+- Strong if you're already in the `$VIRTUAL` token ecosystem.
+- Built-in agent marketplace with discovery (a layer above CardZero).
+- Closed registry (Virtuals decides who's listed).
+- All settlement requires `$VIRTUAL` token.
+
+Where CardZero is different:
+- **No token gate.** USDC only. No need to acquire a project's coin to participate.
+- **Open contracts.** Anyone can deploy a competing implementation.
+- **Just settlement, no marketplace.** We deliberately don't run a discovery
+  layer — that's a feature, not a bug. Lets other projects build markets on top.
+- **Standards-aligned.** ERC-8004 + ERC-8183 are EIPs anyone can implement.
+
+A side-by-side analysis is in our
+[competitor analysis doc](https://github.com/mrocker/CardZero/blob/main/docs/COMPETITOR-ANALYSIS.md)
+on GitHub.
+
+## vs building it yourself
+
+You **could** build this. Here's roughly what's involved:
+
+| Component | Effort | Risk |
+| --- | --- | --- |
+| ERC-4337 wallet contract | 1–2 weeks | High — re-entrancy, signature replay, policy bypass |
+| Custom session key system | 1 week | High — key rotation, revocation correctness |
+| Off-chain UserOp signing | 1 week | Medium — bundler integration, gas estimation |
+| Paymaster integration | 3 days | Low — Alchemy / Pimlico both work |
+| Reputation registry | 2 weeks | Medium — replay protection, signature verification |
+| Job escrow contract | 2 weeks | High — fund safety, evaluator trust |
+| Audit | 4–8 weeks | Critical — bugs lose funds |
+| **Total** | **3–4 months** | |
+
+Plus operating costs: bundler, paymaster, RPC, Cloudflare, etc.
+
+Or use CardZero, which has done all of this and is live on mainnet, MIT-licensed
+where applicable, and free at the API layer (you only pay the 2% transaction fee).
+
+## When NOT to use CardZero
+
+- Your agent only ever pays **on-chain wallets** with **gas** (no need for spending
+  rules) → use ethers.js / viem directly.
+- Your use case requires **fiat** rails or **chargeback** support → use Stripe.
+- You need **multi-chain** today (Solana, Polygon, etc.) → wait for our
+  Phase 2 or use a separate protocol.
+- Your agents only transact with **trusted counterparties** you already
+  vetted → escrow + reputation are over-engineered for your case.
+
+## Summary
+
+CardZero is the layer between "agent has decisions to make" and "agent has
+moved money on-chain." If you're using agents to do anything that involves
+payment to or from third parties, CardZero is probably the shortest path
+to production.

@@ -1,0 +1,133 @@
+---
+title: Reputation
+description: "Public reputation lookup; sync trigger for Owners."
+---
+
+Base URL: `https://api.cardzero.ai/v1`
+
+## Get reputation summary
+
+<ParamField path="GET /reputation/:walletAddress" />
+
+No authentication. Rate-limited at 60/min per IP.
+
+**Response 200:**
+
+```json
+{
+  "walletAddress": "0xa1f2…70D0",
+  "agentId": 1,
+  "agentURI": "https://cardzero.ai/.well-known/agent/0xa1f2…70D0",
+  "onchainStatus": "registered",
+  "score": {
+    "total": 23,
+    "success": 28,
+    "failure": -5
+  },
+  "counts": {
+    "payments": 14,
+    "jobs": 2,
+    "freezes": 1
+  },
+  "firstSeenAt": 1741232400,
+  "lastActiveAt": 1715990123,
+  "trustSignals": {
+    "frozen": false,
+    "lifetimeVolumeUsdc": "47.50"
+  }
+}
+```
+
+`onchainStatus` values:
+- `pending`: registration in progress (not yet confirmed)
+- `registered`: agent is in IdentityRegistry
+- `failed`: registration permanently failed; manual intervention needed
+- `not_found`: never attempted (probably a non-CardZero wallet)
+
+If `not_found`, score will be all zeros — the wallet has no CardZero history.
+
+## Get reputation events
+
+<ParamField path="GET /reputation/:walletAddress/events" />
+
+No authentication. Returns event history.
+
+**Query params:**
+
+| Param | Default | Max |
+| --- | --- | --- |
+| `limit` | 50 | 100 |
+| `offset` | 0 | — |
+
+**Response 200:**
+
+```json
+{
+  "events": [
+    {
+      "id": "revt_…",
+      "eventType": "job_completed",
+      "value": 5,
+      "tag1": "job",
+      "tag2": null,
+      "sourceKind": "erc8183_job",
+      "sourceRef": "job_abc123:approved",
+      "onchainTxHash": "0x…",
+      "syncedAt": 1715000050,
+      "createdAt": 1715000000
+    }
+  ]
+}
+```
+
+`onchainTxHash`/`syncedAt` are null until the daily 04:30 UTC cron syncs
+the event to ReputationRegistry. Off-chain DB record is immediate.
+
+## Trigger sync (admin)
+
+<ParamField path="POST /reputation/wallets/:walletId/sync" />
+
+JWT + ownership. Manually triggers the sync cron for a single wallet.
+Useful for debugging.
+
+**Response 200:**
+
+```json
+{
+  "synced": 3,
+  "skipped": 0,
+  "errors": 0
+}
+```
+
+## Public agent profile (well-known)
+
+<ParamField path="GET /.well-known/agent/:walletAddress" />
+
+No authentication. ERC-8004 standard well-known endpoint.
+
+**Response 200:**
+
+```json
+{
+  "name": "CardZero agent",
+  "description": "…",
+  "type": "agent",
+  "endpoints": {
+    "api": "https://api.cardzero.ai/v1"
+  },
+  "owner": { "wallet": "0x…" },
+  "registeredAt": "2026-05-04T10:23:00Z"
+}
+```
+
+Default profile is auto-generated from CardZero data. Owners can override
+by hosting their own profile JSON and changing `agentURI` in the registry
+(admin operation today; self-serve roadmap).
+
+## Errors
+
+| Code | HTTP | When |
+| --- | --- | --- |
+| `INVALID_ADDRESS` | 400 | Wallet address malformed |
+| `RATE_LIMITED` | 429 | Exceeded reputationLimiter |

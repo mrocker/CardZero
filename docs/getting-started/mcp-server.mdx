@@ -1,0 +1,142 @@
+---
+title: MCP Server
+description: "Use CardZero in Claude Desktop, Cursor, VS Code via the official Model Context Protocol server."
+---
+
+The official `cardzero-mcp` package exposes 10 tools to any MCP-capable host:
+Claude Desktop, Cursor, VS Code, Cline, Continue, etc. The agent can manage
+wallets, send payments, run job lifecycles — all in natural language.
+
+<Card
+  title="cardzero-mcp on npm"
+  icon="cube"
+  href="https://www.npmjs.com/package/cardzero-mcp"
+>
+  Latest: v0.2.0 · 10 tools · stdio transport · MIT licensed
+</Card>
+
+## Tools available
+
+| Tool | What it does |
+| --- | --- |
+| `create_wallet` | Create a CardZero wallet (returns claim key for Owner) |
+| `get_balance` | Read current USDC balance |
+| `send_payment` | Send USDC to an address (after user confirmation) |
+| `pay_x402` | Pay an HTTP 402-protected resource |
+| `list_payments` | Recent payment history |
+| `get_payment` | Status of a specific payment by ID |
+| `create_job` | Create an ERC-8183 escrow Job |
+| `fund_job` | Lock budget USDC into Job escrow |
+| `submit_job` | Submit a deliverable hash (Provider side) |
+| `get_job` | Inspect Job state (no auth needed) |
+
+## Setup
+
+### Prerequisites
+
+- **Node.js 18+** (for `npx`)
+- **CardZero account** — created via [Quickstart](/getting-started/quickstart)
+- **API Key + Wallet ID** — from your dashboard
+
+### Claude Desktop
+
+Open `~/Library/Application Support/Claude/claude_desktop_config.json`
+(macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows). Add:
+
+```json
+{
+  "mcpServers": {
+    "cardzero": {
+      "command": "npx",
+      "args": ["-y", "cardzero-mcp"],
+      "env": {
+        "CARDZERO_API_KEY": "czapi_…",
+        "CARDZERO_WALLET_ID": "wallet_…"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop completely (Cmd+Q, not just close).
+
+Try: _"What's my CardZero balance?"_ → Claude calls `get_balance` → answers.
+
+### Cursor
+
+Cursor reads MCP config from `~/.cursor/mcp.json`. Same JSON shape as
+Claude Desktop above.
+
+After saving, Cursor → Settings → MCP → toggle CardZero on.
+
+### VS Code (with MCP extension)
+
+Install the MCP extension. Open settings JSON, add the same `mcpServers` block.
+
+### Cline / Continue / other MCP clients
+
+Same `npx -y cardzero-mcp` invocation; consult your client's docs for where
+to place the config.
+
+## Verifying it works
+
+Once configured, ask the agent something the tool resolves:
+
+> _"Show me my last 5 CardZero payments."_
+
+The agent should call `list_payments` and respond with a table. If it says
+"I don't have a tool for that," the MCP server isn't loading — see
+[Troubleshooting](#troubleshooting) below.
+
+## Tool behavior notes
+
+- **`send_payment` and `pay_x402` should ask for confirmation.** The SKILL
+  prompts the agent to verify amount + recipient with the user before calling
+  the tool. Don't override this.
+- **`create_wallet` returns a claim key** which the agent should pass to the
+  Owner verbatim. The key is one-time and expires in 7 days.
+- **`get_payment` and `get_job` are public** — no auth required, useful for
+  third-party verification.
+- **`create_job` requires v3 wallet.** If you used v2, the call will return
+  `WALLET_VERSION_MISMATCH`. Create a new v3 wallet.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Claude says 'I don't see a CardZero tool'">
+    1. Confirm config file path is correct for your OS.
+    2. Validate JSON syntax (use [jsonlint.com](https://jsonlint.com)).
+    3. Fully quit & restart Claude Desktop (Cmd+Q on macOS, not just close window).
+    4. Check Claude logs: `~/Library/Logs/Claude/mcp*.log`. Look for
+       `cardzero-mcp` startup errors.
+  </Accordion>
+  <Accordion title="'Missing required environment variables' on startup">
+    Both `CARDZERO_API_KEY` and `CARDZERO_WALLET_ID` must be set in the `env`
+    block of your MCP config. Get them from
+    [cardzero.ai/dashboard](https://cardzero.ai/dashboard) → wallet detail page.
+  </Accordion>
+  <Accordion title="'Invalid or revoked API key'">
+    The Owner may have rotated the key. Go to the wallet detail page →
+    **API Key** → Copy the new value → update your MCP config → restart host.
+  </Accordion>
+  <Accordion title="'WALLET_BUSY' on payments">
+    The wallet is processing another payment. CardZero serializes per-wallet
+    operations to avoid nonce collision. Wait a few seconds and retry.
+  </Accordion>
+</AccordionGroup>
+
+## Updating
+
+```bash
+# npx auto-fetches latest unless cached. To force latest:
+rm -rf ~/.npm/_npx
+# Then restart your MCP host.
+```
+
+Or pin a version in config:
+
+```json
+"args": ["-y", "cardzero-mcp@0.2.0"]
+```
+
+Latest version always at [npmjs.com/package/cardzero-mcp](https://www.npmjs.com/package/cardzero-mcp).

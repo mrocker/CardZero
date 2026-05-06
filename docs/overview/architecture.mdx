@@ -1,0 +1,155 @@
+---
+title: Architecture
+description: "How CardZero's smart contracts, API, and Dashboard fit together."
+---
+
+CardZero has three layers: **on-chain contracts** (the source of truth),
+the **HTTP API** (convenience wrapper), and the **Dashboard** (Owner UI).
+
+```
+┌───────────────────────────────────────────────────────────┐
+│                                                            │
+│   Owner (browser)            Agent (anywhere)              │
+│        │                          │                        │
+│        │  JWT                     │  API Key               │
+│        ▼                          ▼                        │
+│  ┌──────────────┐          ┌──────────────┐                │
+│  │  Dashboard    │          │  HTTP API     │                │
+│  │  (Next.js)    │◀────────▶│  (Express)    │                │
+│  └──────┬────────┘          └──────┬────────┘                │
+│         │                          │                        │
+│         │ user ops (JWT)           │ Agent ops (API key)    │
+│         ▼                          ▼                        │
+│  ┌──────────────────────────────────────┐                    │
+│  │  CardZero contracts (Base mainnet)    │                    │
+│  │   ├── CardZeroFactory  (deploys wallets)                  │
+│  │   ├── CardZeroWallet   (per-agent ERC-4337)               │
+│  │   ├── IdentityRegistry (ERC-8004)                         │
+│  │   ├── ReputationRegistry (ERC-8004)                       │
+│  │   └── CardZeroJobs     (ERC-8183 escrow)                  │
+│  └──────────────────────────────────────┘                    │
+│                                                            │
+└───────────────────────────────────────────────────────────┘
+```
+
+## On-chain layer (source of truth)
+
+**All money + state lives in smart contracts on Base mainnet.** Not in our DB.
+If our servers vanish, your wallet keeps working — interact directly with
+the contracts.
+
+| Contract | What it does | Mainnet address |
+| --- | --- | --- |
+| `CardZeroFactory` (V2) | CREATE2 deploys wallets at deterministic addresses | `0xa3fc38f1…412e` |
+| `CardZeroFactoryV3` | Same, but for Jobs-aware V3 wallets | `0x0c1d37f4…aabb` |
+| `CardZeroWallet` (V2 impl) | ERC-4337 wallet with policy + session keys + fees | `0x601b1E85…7470` |
+| `CardZeroWalletV3` (impl) | V2 + Jobs/escrow allow-list in policy | `0x70ff1139…2298` |
+| `IdentityRegistry` | ERC-8004: maps agent ID → wallet + metadata | `0x1db9b790…fecbe` |
+| `ReputationRegistry` | ERC-8004: signed reputation events | `0xc00a5757…b338` |
+| `CardZeroJobs` | ERC-8183: 6-state Job lifecycle escrow | `0xb28a0cca…4ba8` |
+| USDC (token) | The currency | `0x833589fC…2913` |
+
+All contracts use **UUPS upgradeable proxies** (ERC-1967) — admin role can
+upgrade the implementation. Existing V1 wallets (EIP-1167 minimal proxies) are
+not upgradeable but remain functional.
+
+[Full reference →](/reference/contract-addresses)
+
+## API layer (convenience)
+
+The HTTP API at `https://api.cardzero.ai/v1`:
+
+- Wraps complex on-chain operations as one-call HTTP endpoints.
+- Manages session keys (so the agent doesn't deal with EIP-712 signing).
+- Routes UserOps through Alchemy bundler with paymaster (gasless for agents).
+- Mirrors on-chain state in SQLite for fast reads.
+- Sends webhooks on state changes.
+
+**The API is convenience, not authority.** If we miscompute, the on-chain
+contract is the source of truth. Reads are best-effort cached; writes are
+always authoritative on-chain.
+
+## Dashboard layer (Owner UI)
+
+A Next.js app at `https://cardzero.ai`:
+
+- `/claim` — Owner takes ownership of a wallet
+- `/login` — Username + password (JWT)
+- `/dashboard` — List wallets owned by this user
+- `/wallets/[id]` — Wallet detail: balance, rules, payments, jobs, API key, webhook secret
+- `/jobs/[id]` — Job detail (4 lifecycle tx hashes + Basescan links)
+- `/agent/[wa]` — Public agent profile (no login; reputation lookup)
+
+Owner login is intentionally **username + password**, not Web3 wallet — most
+human Owners don't have crypto wallets and shouldn't need one.
+
+## Three trust models
+
+CardZero uses **three different signing identities**:
+
+1. **Owner** (you, the human) — username + password → JWT.
+   Used for all rule changes, freeze, fund, view.
+2. **Agent** (your AI) — API Key → derives wallet ID server-side.
+   Used to make payments, run jobs.
+3. **Session Key** (auto-managed) — ECDSA key on a smart contract policy.
+   Signs UserOperations. **The agent never sees this.** API server holds
+   AES-encrypted private key; rotates every 30 days.
+
+This separation means **a leaked API key can't drain the wallet** — it's
+bound to a single wallet, has explicit policy enforced on-chain (per-tx
+limit, daily limit, whitelist), and the agent still can't bypass them.
+
+## Background services
+
+Beyond request/response, CardZero runs:
+
+| Service | Schedule | What it does |
+| --- | --- | --- |
+| Webhook drain | Every 60s | Posts pending notifications to Owner-configured URLs |
+| Evaluator | Every 2 min | Auto-evaluates submitted Jobs (rule engine: manual/json_schema/http_check) |
+| Reputation sync | Daily 04:30 UTC | Syncs DB-recorded reputation events to ERC-8004 contract |
+| Milestone compute | Daily 05:00 UTC | Computes lifetime volume / payment count milestones |
+| Stats snapshot | Every 5 min | Updates landing-page live counter |
+| SQLite backup | Daily 03:07 UTC | DB + job-specs archive (7-day retention) |
+
+All run on a single VPS (PM2 cluster mode, instances=1) — boring, fast, predictable.
+
+## Key isolation principle
+
+Four EOA roles, four separate keys, never overlap:
+
+| Role | Address | What it does |
+| --- | --- | --- |
+| `DEPLOYER` | `0x7998…edce` | Deploys contracts, owner of all wallets, signs claim tx |
+| `REGISTRAR` | `0xfd86…ED51` | Registers agents in IdentityRegistry |
+| `ATTESTOR` | `0xf76a…a1D4` | Signs ReputationRegistry events |
+| `EVALUATOR` | `0x8157…0E59` | Calls Jobs.complete / Jobs.reject (escrow finalize) |
+
+Why four? **Compartmentalization.** If REGISTRAR's key leaks, attacker can
+register fake agents but can't move anyone's funds. If EVALUATOR leaks, attacker
+can mis-finalize Jobs but can't deploy contracts. Each role has the minimum
+permissions needed.
+
+## Security boundaries
+
+- **Spending rules are enforced on-chain.** Even with admin access to our DB,
+  CardZero engineers cannot spend more than your daily limit allows.
+- **Webhook signatures are HMAC-SHA256 over the per-wallet `webhook_secret`.**
+  Owner can fetch and rotate that secret — we don't need it for anything else.
+- **API keys are AES-256-GCM encrypted at rest.** Plaintext shown to Owner once.
+- **Session keys are AES-256-GCM encrypted, scoped to a single wallet.**
+  Auto-rotate every 30 days. Owner can manually revoke at any time.
+- **No PII collected.** No KYC, no email required, no government ID.
+
+## What can go wrong (and what doesn't)
+
+| Failure | What happens | Recovery |
+| --- | --- | --- |
+| API server crash | API 502; on-chain unaffected | Auto-restart via PM2; tx mid-flight retries |
+| RPC outage | UserOps timeout after 60s | Fall back to backup RPC (configured but rarely used) |
+| Bundler outage | Same | Pimlico fallback (architecture supports; not yet wired) |
+| Paymaster exhausted | UserOps fail with paymaster error | Health check alerts at < $10 remaining |
+| DB corruption | Reads fail; on-chain still fine | Daily backup + recovery playbook ([CLAUDE.md](https://github.com/mrocker/CardZero/blob/main/CLAUDE.md)) |
+| Smart contract bug | UUPS upgrade after audit | Admin-only; users' funds always recoverable via direct chain calls |
+
+[Full incident playbook →](/reference/changelog#incidents)

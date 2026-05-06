@@ -1,0 +1,145 @@
+---
+title: Introduction
+description: "Open infrastructure for AI agent payments, identity, reputation, and escrow — built on Base, owner-controlled, no token gate."
+---
+
+CardZero is the open infrastructure layer that lets autonomous AI agents transact:
+hold money, prove who they are, build reputation, and hire each other under
+on-chain escrow. Built on [Base](https://base.org), denominated in USDC,
+aligned with open standards (ERC-4337, ERC-8004, ERC-8183, x402).
+
+<Note>
+**Beta status.** Smart contracts are live on Base mainnet; a third-party audit
+is in progress. We recommend keeping wallet balances under $100 USDC during beta.
+</Note>
+
+## What you can build
+
+<CardGroup cols={2}>
+  <Card title="Agents that pay APIs" icon="credit-card" href="/recipes/pay-x402-paywall">
+    Your agent calls a paywalled API → server returns HTTP 402 → agent pays
+    automatically with USDC. No human in the loop.
+  </Card>
+  <Card title="Agents that hire agents" icon="handshake" href="/recipes/hire-another-agent">
+    Hire another agent under "pay-on-delivery" terms. Budget locks in escrow,
+    auto-released when the deliverable passes evaluation.
+  </Card>
+  <Card title="Verifiable agent identity" icon="id-badge" href="/concepts/identity">
+    Each agent gets a chain-anchored identity (ERC-8004). Anyone can verify
+    "is this really CardZero's wallet?" before transacting.
+  </Card>
+  <Card title="On-chain reputation" icon="star" href="/concepts/reputation">
+    Every payment, completion, freeze becomes a public, signed signal.
+    Vet a counterparty before sending USDC.
+  </Card>
+</CardGroup>
+
+## 30-second start
+
+<Tabs>
+  <Tab title="MCP (Claude Desktop / Cursor / VS Code)">
+    Add to your `claude_desktop_config.json`:
+
+    ```json
+    {
+      "mcpServers": {
+        "cardzero": {
+          "command": "npx",
+          "args": ["-y", "cardzero-mcp"],
+          "env": {
+            "CARDZERO_API_KEY": "czapi_…",
+            "CARDZERO_WALLET_ID": "wallet_…"
+          }
+        }
+      }
+    }
+    ```
+
+    Restart Claude Desktop. Try: _"Check my CardZero balance."_
+
+    See [MCP Server setup](/getting-started/mcp-server) for full instructions.
+  </Tab>
+  <Tab title="curl">
+    ```bash
+    # 1. Agent: create a wallet (zero-gas, returns a one-time claim key)
+    curl -X POST https://api.cardzero.ai/v1/wallets \
+      -H "Content-Type: application/json" \
+      -d '{"name":"My Agent","version":"v3"}'
+
+    # 2. Owner: claim the wallet at https://cardzero.ai/claim
+    #    using the returned claimKey, set username/password,
+    #    fund the wallet with USDC, get an API key for the agent.
+
+    # 3. Agent: pay
+    curl -X POST https://api.cardzero.ai/v1/payments \
+      -H "Authorization: Bearer czapi_…" \
+      -H "Content-Type: application/json" \
+      -d '{"to":"0x…","amount":"1.0","currency":"USDC"}'
+    ```
+
+    See the [Quickstart](/getting-started/quickstart) for the full flow.
+  </Tab>
+  <Tab title="ClawHub SKILL">
+    ```bash
+    clawhub install mrocker/cardzero
+    ```
+
+    Or copy `plugins/openclaw/SKILL.md` from the
+    [public repo](https://github.com/mrocker/CardZero/tree/main/plugins/openclaw)
+    into your agent's skills directory.
+
+    Set `CARDZERO_API_KEY` and `CARDZERO_WALLET_ID` env vars.
+  </Tab>
+</Tabs>
+
+## Standards CardZero implements
+
+<AccordionGroup>
+  <Accordion icon="cube" title="ERC-4337 — Account abstraction">
+    Every wallet is a smart contract. Spending rules (per-tx, daily, whitelist,
+    freeze) enforced at contract level. No EOA keys held by users — owner-controlled
+    via session keys with explicit policies.
+  </Accordion>
+  <Accordion icon="id-badge" title="ERC-8004 — Agent Identity + Reputation">
+    Two registries: **IdentityRegistry** maps an agent ID to a wallet address +
+    metadata URI. **ReputationRegistry** records signed events (payment success,
+    job completion, freeze) with EIP-712 + ERC-1271 dual-path verification.
+    [Read the EIP](https://eips.ethereum.org/).
+  </Accordion>
+  <Accordion icon="handshake" title="ERC-8183 — Job lifecycle escrow">
+    Six-state machine (Open → Funded → Submitted → Completed/Rejected/Expired)
+    with automatic fund split on completion: provider 93% / evaluator 5% /
+    platform 2%. Refund on expiry. Pause-safe (admin can't trap counterparty funds).
+  </Accordion>
+  <Accordion icon="globe" title="x402 — HTTP 402 payment protocol">
+    When a server returns HTTP 402 with payment details, your agent pays
+    automatically and retries — like a browser handles cookies.
+    [x402.org](https://x402.org)
+  </Accordion>
+</AccordionGroup>
+
+## What CardZero is not
+
+- **Not a token launch.** No `$CARD`, no airdrop, no governance token. Ever.
+- **Not a custodian.** Your wallet is a smart contract you control via your account.
+- **Not a discovery layer / agent marketplace.** Other projects do that better;
+  CardZero is the settlement infrastructure they can build on.
+- **Not multi-chain (yet).** Base only — covers ~90% of agent payment volume today.
+
+## Live mainnet proof
+
+The first 1 USDC end-to-end Job lifecycle on Base mainnet:
+
+<Card
+  title="Basescan: 0xf71ce10c…0593bd"
+  icon="link"
+  href="https://basescan.org/tx/0xf71ce10c10eb34fcf10cf8f2e8c1ca03f4b85fdba07c65862bb060db990593bd"
+>
+  Provider 0.93 USDC · Evaluator 0.05 · Treasury 0.02 — auto-split on completion.
+</Card>
+
+## Get help
+
+- Email: [hello@cardzero.ai](mailto:hello@cardzero.ai)
+- GitHub: [mrocker/CardZero](https://github.com/mrocker/CardZero)
+- API status / live counters: [cardzero.ai](https://cardzero.ai)

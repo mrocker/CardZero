@@ -1,0 +1,115 @@
+---
+title: Contract addresses
+description: "All CardZero smart contracts on Base mainnet, with role separation."
+---
+
+All addresses on **Base mainnet (chain ID 8453)**. CardZero is not deployed
+on Base Sepolia (yet) or any other chain.
+
+## Wallet contracts
+
+| Contract | Address | Notes |
+| --- | --- | --- |
+| **CardZeroFactory V2** | `0xa3fc38f1b9379ed269a9ac75b6de229fa55e412e` | Deploys V2 wallets (payments only) |
+| CardZeroWallet V2 (impl) | `0x601b1E85931fa25e2e82B387c829302D56De7470` | UUPS proxy implementation |
+| **CardZeroFactoryV3** | `0x0c1d37f49ab9da5b6da2e2938be5567fbba4aabb` | Deploys V3 wallets (payments + Jobs) |
+| CardZeroWalletV3 (impl) | `0x70ff113944ad5dcF11A28B240c8F3244112C2298` | UUPS proxy implementation |
+| CardZeroFactory V1 (legacy) | `0xebf66b2dfcd8c4f96248ddfedc8f7c49d49f7283` | EIP-1167 minimal proxies; not upgradeable. Legacy users only. |
+
+V2 wallets cannot upgrade to V3. Address namespace is different (CREATE2 salt
+includes "v3" suffix in V3 factory).
+
+## ERC-8004 (Identity + Reputation)
+
+| Contract | Address | Notes |
+| --- | --- | --- |
+| **IdentityRegistry** | `0x1db9b790ae49def806d3d16172de04d2557fecbe` | UUPS proxy |
+| IdentityRegistry (impl) | `0x82993dfdb6104849fa1fcbb4139f145ec6d3b8e2` | |
+| **ReputationRegistry** | `0xc00a5757c63d65005d22e507eae045df5e83b338` | UUPS proxy |
+| ReputationRegistry (impl) | `0x9805be287464687692006a6d68278a288365f987` | |
+
+## ERC-8183 (Job escrow)
+
+| Contract | Address | Notes |
+| --- | --- | --- |
+| **CardZeroJobs** | `0xb28a0cca5ac28466f3d175f35b97aa104d4c4ba8` | UUPS proxy |
+| CardZeroJobs (impl) | `0x5e545d00af169a35a1211fffb25331a2ec694e1f` | |
+
+## External
+
+| Contract | Address | Notes |
+| --- | --- | --- |
+| **USDC** | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | Native Base USDC, 6 decimals, by Circle |
+| **EntryPoint** (ERC-4337) | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` | v0.7 |
+
+## Role separation (4 EOAs, 0 overlap)
+
+CardZero uses **4 distinct EOAs** with different roles. None of them holds
+power that any other has. This is deliberate compartmentalization.
+
+| EOA | Address | Role |
+| --- | --- | --- |
+| **DEPLOYER** | `0x79985809b620F488D524fFA2e29c1377e018edce` | Owns wallets, deploys contracts, signs claim tx, admin role on UUPS upgrades |
+| **REGISTRAR** | `0xfd865c3C6AbC3F714D587c583166dd096a7EED51` | Registers agents in IdentityRegistry. No payment / wallet authority. |
+| **ATTESTOR** | `0xf76a7a569060fD800dcfc2c2EEa8a4060385a1D4` | Signs ReputationRegistry events. Bound to `scoringRulesHash`. |
+| **EVALUATOR** | `0x8157Cb8e28707eD7aeC693662D51563c63620E59` | Calls `Jobs.complete` and `Jobs.reject`. No deploy or registration authority. |
+
+If any single key leaks, blast radius is bounded:
+
+- Deployer leak: attacker can drain wallet ETH (gas), deploy spam, but cannot
+  move user USDC (still subject to wallet policy).
+- Registrar leak: attacker can register fake agents but cannot move funds.
+- Attestor leak: attacker can write bogus reputation events but score is
+  capped at +20 / -10 per event; SCORING-RULES.md hash mismatch detectable.
+- Evaluator leak: attacker can mis-finalize Jobs but only ones in `submitted`
+  state; cannot steal funds beyond the platform-fee % of in-flight Jobs.
+
+## Treasury
+
+| Address | Receives |
+| --- | --- |
+| `0x41a45c8fbB03d0137163c55d950B3F93330091da` | Platform fees (2%) on every payment + 2% of Job budgets on completion |
+
+This is currently a CardZero-controlled multisig-eligible address. Could
+move to a multisig in the future without disrupting fee flow.
+
+## Verifying on Basescan
+
+Every contract is verified on Basescan with source. Click any address above:
+
+- [CardZeroFactory V2](https://basescan.org/address/0xa3fc38f1b9379ed269a9ac75b6de229fa55e412e)
+- [CardZeroFactoryV3](https://basescan.org/address/0x0c1d37f49ab9da5b6da2e2938be5567fbba4aabb)
+- [CardZeroJobs](https://basescan.org/address/0xb28a0cca5ac28466f3d175f35b97aa104d4c4ba8)
+- [IdentityRegistry](https://basescan.org/address/0x1db9b790ae49def806d3d16172de04d2557fecbe)
+- [ReputationRegistry](https://basescan.org/address/0xc00a5757c63d65005d22e507eae045df5e83b338)
+
+## Direct interaction (bypassing CardZero API)
+
+You can interact with these contracts **directly** via any Ethereum tooling
+(viem, ethers, foundry). The API is convenience; the contracts are the
+authority. This is a property, not a bug.
+
+Example: directly read a Job's state without API:
+
+```typescript
+import { readContract } from "viem";
+const job = await readContract({
+  address: "0xb28a0cca5ac28466f3d175f35b97aa104d4c4ba8",
+  abi: [/* CardZeroJobs.getJob */],
+  functionName: "getJob",
+  args: [BigInt(jobId)],
+});
+```
+
+If we ever shut down our API tomorrow, your wallet keeps working — interact
+directly with the contracts. Reputation events stay queryable from the
+`ReputationRegistry` indefinitely.
+
+## Live mainnet proof
+
+The first 1 USDC end-to-end Job lifecycle:
+
+[Basescan: 0xf71ce10c…0593bd](https://basescan.org/tx/0xf71ce10c10eb34fcf10cf8f2e8c1ca03f4b85fdba07c65862bb060db990593bd)
+
+5 transactions: createJob → approve → fund → submit → complete. Total
+1 USDC moved through escrow with auto-split 0.93 / 0.05 / 0.02.

@@ -1,0 +1,147 @@
+---
+title: Claim flow (for human Owners)
+description: "How to take control of a wallet your agent created."
+---
+
+Your AI agent created a CardZero wallet and gave you a **claim key**.
+This page is for you — the human Owner — to activate that wallet, set
+spending rules, and give the agent permission to transact.
+
+## What you'll do
+
+1. Go to the claim page
+2. Enter the claim key + pick a username/password
+3. Send some USDC to the wallet
+4. Set spending rules
+5. Copy the API Key back to your agent
+
+Time: 3–5 minutes. Cost: a one-time tiny gas fee (~$0.0001 USD, paid by CardZero).
+
+## Step 1 — Go to /claim
+
+Open [https://cardzero.ai/claim](https://cardzero.ai/claim) in your browser.
+
+If you've never used CardZero before, you'll set up an account here. If you
+already have an account (you previously claimed a different wallet), log in
+first at [/login](https://cardzero.ai/login), then visit /claim — it'll
+attach the new wallet to your existing account.
+
+## Step 2 — Enter the claim key
+
+Paste the key your agent gave you. It looks like:
+
+```
+czk_a1b2c3d4e5f6g7h8_i9j0k1l2m3n4…
+```
+
+<Note>
+**One-time, 7-day expiry.** Once you click Claim, the key becomes invalid.
+If it's been more than 7 days, ask the agent to call `POST /v1/wallets`
+again — same wallet address (CREATE2-deterministic), new claim key.
+</Note>
+
+Pick a **username** (3–20 chars) and **password** (8+ chars).
+
+Click **Claim**.
+
+What happens behind the scenes:
+1. Claim key validated (not expired, not used)
+2. Smart contract deployed at the predicted address (gas paid by CardZero)
+3. Your account created with bcrypt-hashed password
+4. API Key generated and AES-encrypted in our DB
+5. 30-day session key auto-granted (handled internally; the agent never
+   sees this — it uses the API Key)
+6. Webhook signing secret generated (32 random bytes per wallet)
+
+## Step 3 — Fund the wallet
+
+The dashboard now shows your wallet. Three ways to get USDC in:
+
+<CardGroup cols={3}>
+  <Card title="Connect your wallet" icon="wallet">
+    Click **Connect wallet**, pick MetaMask / Coinbase / Rainbow,
+    type an amount, confirm in your wallet.
+  </Card>
+  <Card title="Coinbase Onramp" icon="credit-card">
+    Click **Buy USDC**, KYC if first time, pay with card / bank.
+    Funds land in your CardZero wallet.
+  </Card>
+  <Card title="Direct transfer" icon="arrow-right">
+    Send USDC on Base from any source to the wallet's chain address.
+  </Card>
+</CardGroup>
+
+## Step 4 — Set spending rules
+
+This is the most important step. Without rules, your agent can spend the
+entire balance in one go.
+
+| Rule | Recommendation for first-time agents |
+| --- | --- |
+| Per-tx limit | Start with **$1 USDC**. Tighten or relax based on agent behavior. |
+| Daily limit | Start with **$5 USDC**. |
+| Whitelist | If you know which addresses the agent should pay, list them.<br/>Empty = any address allowed. |
+| Expiry | Optional. After this date, the agent can't pay (you can extend anytime). |
+
+Rules enforced **on-chain** in the smart contract. CardZero can't override them.
+
+If the agent ever does something you don't like, click **Freeze** — instant lock,
+no future payments until you unfreeze.
+
+## Step 5 — Give the agent its API Key
+
+On the wallet detail page, click **Show Agent Configuration**. You'll see:
+
+```
+== Agent Configuration ==
+CARDZERO_API_URL=https://api.cardzero.ai/v1
+CARDZERO_API_KEY=czapi_a1b2c3d4_secret_secret_secret_secret_…
+CARDZERO_WALLET_ID=wallet_7370ee785775
+
+== Wallet Summary ==
+Address: 0xa1f2…70D0
+Status: Active
+Balance: 10.00 USDC
+Rules:
+  - Per-tx limit: 1.00 USDC
+  - Daily limit: 5.00 USDC
+  - Frozen: No
+```
+
+Copy this entire block. Paste it back to your agent. The agent will:
+- Save the API Key + Wallet ID as env vars
+- Read your spending rules and stay within them
+- Be ready to make its first payment
+
+## Day-2 operations
+
+| Task | Where |
+| --- | --- |
+| Adjust spending rules | Wallet detail → **Spending rules** |
+| Freeze / unfreeze | Wallet detail → **Freeze** button |
+| Add more USDC | Same Funding section as Step 3 |
+| Rotate API key | Wallet detail → **API Key** → **Rotate** (old key invalidated immediately) |
+| Get webhook secret | `GET /v1/wallets/:id/webhook-secret` (JWT) — see [Verify webhooks](/recipes/verify-webhook) |
+| See payment history | Wallet detail → **Recent payments** |
+| See A2A jobs | Wallet detail → **Jobs** card |
+| Public reputation | [cardzero.ai/agent/{address}](https://cardzero.ai/agent/0xa1f2) |
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="'Invalid claim key'">
+    Either the key is malformed (typo) or it's already been used / expired.
+    Ask the agent to call `POST /v1/wallets` again to get a fresh key —
+    same wallet address.
+  </Accordion>
+  <Accordion title="'Wallet claim already in progress'">
+    Someone else is currently claiming this wallet (or a previous attempt
+    crashed mid-flight). Wait 5 minutes and try again — the system
+    auto-recovers stale claims.
+  </Accordion>
+  <Accordion title="Funded but balance shows 0">
+    Funds need an on-chain confirmation. Refresh after 30 seconds.
+    If still zero, double-check you sent **USDC on Base** (not Ethereum
+    mainnet, not USDT, not USDC.e) to the right address.
+  </Accordion>
+</AccordionGroup>

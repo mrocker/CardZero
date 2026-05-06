@@ -1,0 +1,118 @@
+---
+title: What is CardZero
+description: "Open infrastructure for AI agent payments, identity, reputation, and escrow."
+---
+
+CardZero is the **settlement layer for the agent economy**.
+
+When an AI agent needs to pay for something — an API call, a data feed, another
+agent's work — it can't use a credit card (no human in the loop), can't use a
+crypto wallet directly (key management, gas, complexity), and can't use Stripe
+(designed for humans). CardZero closes that gap.
+
+## The problem we solve
+
+A real-world AI agent today wants to:
+
+1. **Pay for things autonomously** — APIs, data, content, compute. Without
+   asking for permission on every $0.001 charge.
+2. **Hire other agents** — when one agent doesn't have a capability another
+   does, they should be able to transact directly under "pay-on-delivery" terms.
+3. **Prove reputation** — an unknown agent claiming "I'm reliable" doesn't
+   prove anything. A signed on-chain track record does.
+4. **Stay within bounds** — the human owner needs to set limits the agent
+   physically cannot exceed (not "shouldn't" — _can't_).
+
+CardZero gives agents all four, in one stack, on Base mainnet, with no token
+required.
+
+## The stack
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Application: your agent                                  │
+├──────────────────────────────────────────────────────────┤
+│  Service:   x402  ·  A2A direct  ·  A2A escrow            │
+├──────────────────────────────────────────────────────────┤
+│  Identity:  ERC-8004 IdentityRegistry                     │
+│  Reputation: ERC-8004 ReputationRegistry                  │
+├──────────────────────────────────────────────────────────┤
+│  Money:     ERC-4337 wallet  ·  USDC                      │
+├──────────────────────────────────────────────────────────┤
+│  Chain:     Base L2 (Coinbase)                            │
+└──────────────────────────────────────────────────────────┘
+```
+
+Each layer is a public standard. Each is independently useful. You can use
+just the wallet (skip escrow), just escrow (skip reputation), just the
+reputation lookup (no payment), or all of it.
+
+## Who's it for
+
+<CardGroup cols={2}>
+  <Card title="AI agent developers" icon="user-astronaut">
+    You're building an agent in LangChain, LlamaIndex, Claude Code, or anything
+    else. You need it to pay for things. CardZero gives it a wallet in 30 seconds.
+  </Card>
+  <Card title="Agent platforms" icon="server">
+    You run a marketplace, automation tool, or framework where users' agents
+    transact with each other. CardZero is the payment + escrow layer you don't
+    have to build yourself.
+  </Card>
+  <Card title="API providers serving agents" icon="globe">
+    You publish an API that agents call. Drop in x402 and accept USDC payments
+    in a single response header. CardZero pays it on the agent's behalf.
+  </Card>
+  <Card title="Web3 + AI researchers" icon="microscope">
+    You're working on agent identity / reputation / escrow standards. CardZero
+    is the first non-token reference implementation of ERC-8004 + ERC-8183
+    deployed on mainnet. Real data, signed events, public.
+  </Card>
+</CardGroup>
+
+## Design principles
+
+- **Open standards over proprietary protocols.** ERC-4337, ERC-8004, ERC-8183, x402.
+  All public, all portable.
+- **No token gate.** Anyone can use CardZero. No `$CARD`, no airdrop, no governance.
+- **Owner stays in control.** Spending rules enforced at the smart-contract level,
+  not in our API. We can't override them.
+- **Composable, not monolithic.** Use one capability or all four. Mix with other
+  protocols freely.
+- **Boring infrastructure.** We don't ship "AI features." We ship a payments stack
+  that happens to work for agents because it works for everyone.
+
+## What CardZero is **not**
+
+- **Not a token launch.** No `$CARD`, no governance, no points-farm. Ever.
+- **Not a custodian.** Your wallet is a smart contract owned via your account.
+  We facilitate execution; we can't move funds without you.
+- **Not an agent marketplace / discovery layer.** Other projects are doing that
+  better; CardZero is the layer below.
+- **Not a multi-chain solution (yet).** Base only. Covers ~90% of agent payment
+  volume today; we'd rather do one chain well than many chains poorly.
+- **Not legal or financial advice.** Beta. Audit in progress. Use accordingly.
+
+## How it stays open
+
+- **All standards are public EIPs** — anyone can implement, fork, compete.
+- **Smart contract source is public** at [github.com/mrocker/CardZero](https://github.com/mrocker/CardZero).
+- **OpenAPI spec** describes every endpoint;
+  [openapi.yaml](https://github.com/mrocker/CardZero/blob/main/openapi.yaml).
+- **MCP server is MIT-licensed** at [npm: cardzero-mcp](https://www.npmjs.com/package/cardzero-mcp).
+- **Reputation is queryable by anyone** at `GET /v1/reputation/{walletAddress}`.
+
+If we ever stop existing, your wallet keeps working — it's a smart contract
+on Base, not on our servers. Reputation events are on-chain, queryable forever.
+
+## Live mainnet proof
+
+The first 1 USDC end-to-end Job lifecycle on Base mainnet:
+
+<Card
+  title="Basescan: 0xf71ce10c…0593bd"
+  icon="link"
+  href="https://basescan.org/tx/0xf71ce10c10eb34fcf10cf8f2e8c1ca03f4b85fdba07c65862bb060db990593bd"
+>
+  Provider 0.93 USDC · Evaluator 0.05 · Treasury 0.02 — auto-split on completion.
+</Card>

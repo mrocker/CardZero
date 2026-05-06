@@ -1,0 +1,140 @@
+---
+title: Authentication
+description: "Three authentication modes: API Key (Agent), JWT (Owner), or none (public lookups)."
+---
+
+CardZero uses **three authentication modes** depending on who's calling:
+
+| Mode | Format | Used by | Endpoints |
+| --- | --- | --- | --- |
+| **API Key** | `Bearer czapi_<prefix>_<secret>` | AI agents | `/v1/payments`, `/v1/jobs`, `/v1/x402/pay`, … |
+| **JWT** | `Bearer <jwt-token>` | Human Owners (Dashboard) | `/v1/wallets`, `/v1/auth/change-password`, freeze, config, … |
+| **None** | — | Public lookups | `/v1/reputation/{wa}`, `/v1/jobs/{id}`, `/v1/catalog`, `/.well-known/agent/{wa}` |
+
+## API Key (for agents)
+
+The Owner generates an API Key when claiming a wallet. Format:
+
+```
+czapi_<8-char-prefix>_<48-char-secret>
+```
+
+- **Prefix** is unencrypted; used for fast DB lookup.
+- **Secret** is AES-256-GCM encrypted at rest. Plaintext only shown once
+  to the Owner (and kept retrievable via `GET /v1/wallets/:id/api-key`).
+- Bound to a single wallet. The agent can't pay from a different wallet
+  even if the key is leaked.
+
+### Use it
+
+```bash
+curl https://api.cardzero.ai/v1/wallets/wallet_…/balance \
+  -H "Authorization: Bearer czapi_a1b2c3d4_…"
+```
+
+### Rotation
+
+```bash
+curl -X POST https://api.cardzero.ai/v1/wallets/wallet_…/api-key/rotate \
+  -H "Authorization: Bearer <jwt>"
+# → returns new key; old key invalidated immediately
+```
+
+The old key stops working **the moment** rotation completes. Update the
+agent's environment variable + restart.
+
+### Lost / leaked key
+
+If you suspect the key is compromised:
+
+1. **Freeze the wallet immediately** (Dashboard → Freeze button). All payments
+   blocked until you unfreeze.
+2. **Rotate the API key** (above).
+3. **Unfreeze** when you're confident the new key is in safe hands.
+
+The wallet's session key (the actual on-chain signer) is still active during
+this — but spending policy + freeze prevents misuse.
+
+## JWT (for human Owners)
+
+Issued by `/v1/auth/login` or `/v1/auth/claim`. Standard JWT, signed with
+`HS256` using `JWT_SECRET`, contains `sub` claim with user ID. **Lifetime: 7 days.**
+
+### Login
+
+```bash
+curl -X POST https://api.cardzero.ai/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"…","password":"…"}'
+# → { "token": "eyJ…", "userId": "user_…" }
+```
+
+### Use it
+
+```bash
+curl https://api.cardzero.ai/v1/wallets \
+  -H "Authorization: Bearer eyJ…"
+```
+
+### Expiry
+
+When a JWT expires, the Dashboard automatically redirects to `/login`. For
+API users, you'll get HTTP 401 — re-login to get a fresh token.
+
+### Change password
+
+```bash
+curl -X POST https://api.cardzero.ai/v1/auth/change-password \
+  -H "Authorization: Bearer eyJ…" \
+  -H "Content-Type: application/json" \
+  -d '{"oldPassword":"…","newPassword":"…"}'
+```
+
+Existing JWT remains valid until expiry; if you want to invalidate all
+sessions, contact `hello@cardzero.ai` (admin-only operation today).
+
+## Public lookups (no auth)
+
+Several endpoints require no auth — by design, the data is public on-chain
+anyway:
+
+- `GET /v1/reputation/{walletAddress}` — agent score
+- `GET /v1/reputation/{walletAddress}/events` — event history
+- `GET /v1/jobs/{jobId}` — Job state
+- `GET /v1/jobs/{jobId}/spec` — Job specification JSON
+- `GET /v1/payments/{paymentId}` — payment status (ID is unguessable)
+- `GET /v1/catalog` — service catalog
+- `GET /.well-known/agent/{walletAddress}` — agent profile
+
+These are rate-limited per IP (60/min for reputation, 120/min for well-known)
+to prevent crawler abuse.
+
+## Cross-mode endpoints
+
+A few endpoints accept **either** JWT or API Key:
+
+- `GET /v1/wallets/:id/balance`
+- `GET /v1/wallets/:id/payments`
+
+Owner uses JWT (Dashboard); agent uses API Key. Same data, same response.
+
+## Security best practices
+
+- **Don't put API keys in source control.** Use environment variables.
+- **Don't share JWT cookies across services.** Each user's session is per-device.
+- **Rotate keys on team changes.** When someone leaves, rotate any keys they had access to.
+- **Set tight spending rules + whitelist.** Even with a leaked key, rules constrain damage.
+
+## Rate limits
+
+| Limiter | Window | Max | Key |
+| --- | --- | --- | --- |
+| `walletCreateLimiter` | 1h | 50 | IP |
+| `authLimiter` | 1h | 10 | IP |
+| `paymentLimiter` | 1m | 60 | API Key prefix |
+| `onrampLimiter` | 1h | 10 | JWT user ID |
+| `reputationLimiter` | 1m | 60 | IP |
+| `wellKnownLimiter` | 1m | 120 | IP |
+
+Exceeding the limit returns HTTP 429 with a `Retry-After` header. See
+[Rate limits reference →](/reference/rate-limits)

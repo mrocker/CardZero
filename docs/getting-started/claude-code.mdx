@@ -1,0 +1,77 @@
+---
+title: Claude Code
+description: "Use CardZero from Claude Code via the official SKILL.md."
+---
+
+[Claude Code](https://www.anthropic.com/claude-code) reads `CLAUDE.md` files
+in your project for instructions. CardZero ships a Claude-Code-specific
+SKILL snippet that teaches Claude how to use the API.
+
+## One-line install
+
+```bash
+curl -o CLAUDE.md.cardzero \
+  https://raw.githubusercontent.com/mrocker/CardZero/main/plugins/claude-code/SKILL.md
+```
+
+Then append to your project's `CLAUDE.md`:
+
+```bash
+cat CLAUDE.md.cardzero >> CLAUDE.md && rm CLAUDE.md.cardzero
+```
+
+## Set environment variables
+
+Add to your shell profile (`~/.zshrc` or `~/.bashrc`):
+
+```bash
+export CARDZERO_API_URL="https://api.cardzero.ai/v1"
+export CARDZERO_API_KEY="czapi_…"
+export CARDZERO_WALLET_ID="wallet_…"
+```
+
+Reload: `source ~/.zshrc`.
+
+## Verify
+
+In Claude Code, try:
+
+```
+> What's my CardZero balance?
+```
+
+Claude should run a `curl` command to `GET /v1/wallets/$CARDZERO_WALLET_ID/balance`
+and report the result.
+
+## What the SKILL teaches Claude
+
+- **Wallet lifecycle** — when to call `POST /wallets`, how to handle the claim
+  key, what to tell the Owner.
+- **Payment etiquette** — confirm amount + recipient before sending.
+- **Error handling** — what each error code means and how to recover.
+- **Spending limits** — read the Config Summary block, respect it.
+- **A2A jobs** — when to use `POST /jobs` vs `POST /payments` (escrow vs direct).
+
+The full SKILL is ~340 lines covering 11 endpoints. View on
+[GitHub](https://github.com/mrocker/CardZero/blob/main/plugins/claude-code/SKILL.md).
+
+## Tips for Claude Code users
+
+- **Don't share `CARDZERO_API_KEY` with Claude in chat.** Set it as an env var
+  so the SKILL.md can reference `$CARDZERO_API_KEY` without leaking it.
+- **Use a v3 wallet** if you anticipate hiring other agents (Job escrow). The
+  Quickstart defaults to v3 for this reason.
+- **Watch the daily limit.** If your agent hits it, payments fail with
+  `DAILY_LIMIT_EXCEEDED`. The SKILL teaches Claude to suggest the Owner raise it.
+
+## Comparison: SKILL.md vs MCP Server
+
+| | SKILL.md (Claude Code) | MCP Server (Claude Desktop, Cursor, VS Code) |
+| --- | --- | --- |
+| Transport | Plain markdown + curl | JSON-RPC over stdio |
+| Setup | One file append + env vars | Config JSON + restart host |
+| Tools enumerable | No (Claude reads + improvises curl) | Yes (10 explicit tool definitions) |
+| Where it works | Anywhere with CLAUDE.md support | MCP-protocol clients only |
+
+Use whichever your toolchain supports. They cover the same API; you can mix
+them on different agents.

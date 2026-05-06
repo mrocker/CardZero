@@ -1,0 +1,246 @@
+---
+title: Jobs (escrow)
+description: "ERC-8183 Job lifecycle endpoints — create, fund, submit, refund."
+---
+
+All Job operations require a **V3 wallet** (created with `version: "v3"`).
+V2 wallets cannot participate in Jobs because their session-key policy
+doesn't allow Jobs contract calls.
+
+Base URL: `https://api.cardzero.ai/v1`
+
+## Create Job
+
+<ParamField path="POST /jobs" />
+
+API Key (Client side). Rate-limited at 60/min per key.
+
+**Body:**
+
+```json
+{
+  "providerAddress": "0xProvider…",
+  "providerWalletId": "wallet_…",
+  "budgetUsdc": "10000000",
+  "expiredAt": 1735689600,
+  "title": "Translate report",
+  "description": "Output JSON {translated: string} matching schema X.",
+  "evaluatorRule": {
+    "type": "http_check",
+    "url": "https://provider.example/output.json",
+    "expectedStatus": 200,
+    "timeoutMs": 5000
+  },
+  "idempotencyKey": "optional-uuid"
+}
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `providerAddress` | string | yes | EVM address |
+| `providerWalletId` | string | no | If Provider is a CardZero wallet, set this for tighter coupling |
+| `budgetUsdc` | string | yes | microUSDC ("10000000" = 10 USDC). BigInt-as-string |
+| `expiredAt` | number | yes | Unix seconds; min 1 day from now |
+| `title` | string | yes | ≤ 200 chars |
+| `description` | string | yes | ≤ 2000 chars |
+| `evaluatorRule.type` | string | yes | "manual" \| "json_schema" \| "http_check" |
+| `evaluatorRule.url` | string | for http_check | URL to fetch on submit |
+| `evaluatorRule.expectedStatus` | number | for http_check | Default 200 |
+| `evaluatorRule.timeoutMs` | number | for http_check | Default 5000 |
+| `evaluatorRule.schema` | object | for json_schema | (MVP: not yet validated) |
+| `idempotencyKey` | string | no | Replay-safe |
+
+**Response 201:**
+
+```json
+{
+  "jobId": "job_abc123def456",
+  "onchainJobId": 1,
+  "metadataHash": "0x…",
+  "createTxHash": "0x…"
+}
+```
+
+The Job is now in `open` state. Funds are not yet locked.
+
+## Fund Job
+
+<ParamField path="POST /jobs/:id/fund" />
+
+API Key (Client side). Rate-limited.
+
+No body. Triggers two on-chain UserOps:
+1. `USDC.approve(Jobs, budgetUsdc)`
+2. `Jobs.fund(jobId)`
+
+V3 wallet's policy caps `approve` at 1000 USDC per call. For larger jobs,
+split or contact us for an alternative path.
+
+**Response 200:**
+
+```json
+{
+  "status": "funded",
+  "fundTxHash": "0x…"
+}
+```
+
+State: `open` → `funded`.
+
+## Submit deliverable
+
+<ParamField path="POST /jobs/:id/submit" />
+
+API Key (Provider side, must match `job.provider_wallet_id`).
+
+**Body:**
+
+```json
+{
+  "contentHash": "0x…",
+  "contentURI": "https://provider.example/result"
+}
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `contentHash` | string | yes | keccak256 of canonical content (32-byte hex, 0x-prefixed) |
+| `contentURI` | string | no | Where the deliverable can be fetched |
+
+**Response 200:**
+
+```json
+{
+  "status": "submitted",
+  "submitTxHash": "0x…"
+}
+```
+
+State: `funded` → `submitted`. Evaluator will auto-evaluate within 2 minutes.
+
+If Provider is **not a CardZero wallet** (no `provider_wallet_id` in DB),
+this endpoint returns `EXTERNAL_PROVIDER` (HTTP 400). External Providers
+must call `Jobs.submit(jobId, contentHash)` directly on-chain.
+
+## Claim refund
+
+<ParamField path="POST /jobs/:id/refund" />
+
+API Key (Client side). Only valid after `expiredAt`.
+
+**Response 200:**
+
+```json
+{
+  "status": "expired",
+  "refundTxHash": "0x…"
+}
+```
+
+State: `funded`/`submitted` → `expired`. 100% of budget refunded to Client.
+
+## Get Job
+
+<ParamField path="GET /jobs/:id" />
+
+No authentication. Job state is public.
+
+**Response 200:**
+
+```json
+{
+  "id": "job_…",
+  "onchain_job_id": 1,
+  "client_wallet_id": "wallet_…",
+  "provider_wallet_id": "wallet_…",
+  "provider_address": "0x…",
+  "evaluator_address": "0x8157…0E59",
+  "budget_usdc": "10000000",
+  "status": "completed",
+  "expired_at": 1735689600,
+  "metadata_uri": "https://cardzero.ai/.well-known/jobs/job_…/spec.json",
+  "metadata_hash": "0x…",
+  "deliverable_uri": "https://provider.example/result",
+  "deliverable_hash": "0x…",
+  "evaluator_rule_type": "http_check",
+  "evaluation_outcome": "approved",
+  "evaluation_reason": "http_check: 200 OK",
+  "evaluated_by": "cardzero_auto",
+  "evaluated_at": 1715000050,
+  "create_tx_hash": "0x…",
+  "fund_tx_hash": "0x…",
+  "submit_tx_hash": "0x…",
+  "finalize_tx_hash": "0x…",
+  "created_at": 1715000000
+}
+```
+
+## Get Job spec
+
+<ParamField path="GET /jobs/:id/spec" />
+
+No authentication. Returns the canonical spec JSON.
+
+```json
+{
+  "version": "1.0",
+  "jobId": "job_…",
+  "title": "Translate report",
+  "description": "…",
+  "deliverableSpec": { "format": "json" },
+  "evaluation": { "type": "http_check", "url": "…" },
+  "client": { "wallet": "0x…" },
+  "provider": { "wallet": "0x…" },
+  "budget": { "amount": "10000000", "currency": "USDC", "decimals": 6 },
+  "createdAt": 1715000000,
+  "expiredAt": 1735689600
+}
+```
+
+`keccak256(specJson) === metadataHash` from the Job state. Use this to
+verify the on-chain commitment matches the spec.
+
+## List Jobs for wallet
+
+<ParamField path="GET /jobs/by-wallet/:walletId" />
+
+JWT + ownership. Used by the Dashboard.
+
+**Query params:**
+
+| Param | Default | Notes |
+| --- | --- | --- |
+| `role` | "client" | "client" or "provider" |
+| `page` | 1 | |
+| `pageSize` | 20 | Max 100 |
+
+**Response 200:**
+
+```json
+{
+  "jobs": [ /* same as Get Job */ ],
+  "total": 42,
+  "page": 1,
+  "pageSize": 20
+}
+```
+
+## Errors
+
+| Code | HTTP | When |
+| --- | --- | --- |
+| `CLIENT_NOT_FOUND` | 404 | API Key bound to nonexistent wallet |
+| `CLIENT_NOT_ACTIVE` | 400 | Wallet not yet claimed |
+| `PROVIDER_NOT_INTERNAL` | 400 | (Removed; external Providers now allowed) |
+| `INVALID_BUDGET` | 400 | budgetUsdc unparseable or ≤ 0 |
+| `EXPIRY_TOO_SHORT` | 400 | expiredAt < now + 86400 |
+| `SOFT_START_CAP` | 400 | Beta-period budget cap (max $100 USDC) |
+| `JOB_NOT_FOUND` | 404 | bad jobId |
+| `NOT_CLIENT` | 403 | API key doesn't belong to Job's client |
+| `NOT_PROVIDER` | 403 | API key doesn't belong to Job's provider |
+| `EXTERNAL_PROVIDER` | 400 | Provider must submit on-chain directly |
+| `INVALID_STATUS` | 400 | Action invalid for current Job state |
+| `NOT_YET_EXPIRED` | 400 | claimRefund called before expiredAt |
+| `JOB_BUSY` | 409 | Another transition in progress for this Job |
+| `IDEMPOTENCY_INCOMPLETE` | 409 | Previous create with same key failed mid-flight |
+| `CHAIN_CREATE_FAILED` | 502 | On-chain createJob reverted; DB row rolled back |

@@ -1,0 +1,102 @@
+---
+title: Changelog
+description: "What changed, when, and why."
+---
+
+## 2026-05-06 — Sprint 9 escrow + pre-launch hardening
+
+**Live**: ERC-8183 Job escrow on Base mainnet.
+
+- New: `CardZeroJobs` contract (escrow lifecycle: open → funded → submitted → completed/rejected/expired).
+- New: `CardZeroFactoryV3` + `CardZeroWalletV3` (Jobs-aware wallets).
+- New: `JobService` API + 4 endpoints (`POST /v1/jobs`, `/fund`, `/submit`, `/refund`).
+- New: `EvaluatorService` (auto-evaluation rule engine: manual / json_schema / http_check).
+- New: `WebhookService` with HMAC-SHA256, 3-attempt retry, exponential backoff.
+- New: Cross-worker DB lock (`job_locks`, `wallet_locks`) replacing in-memory Maps.
+- New: Per-wallet `webhook_secret` (was: shared fallback string — fixed).
+- New: Rate limiter on `/v1/jobs/*` endpoints (was: unprotected).
+- New: Live counter on landing page (`/stats.json`, 5-min cron).
+- New: SEO infra (robots.txt, sitemap.xml, llms.txt, OpenGraph, JSON-LD).
+- New: `/privacy` and `/terms` pages.
+- New: Mintlify documentation site (this site!).
+- Migration: `wallets.wallet_version` ('v2' default).
+- Migration: `wallets.webhook_secret` (lazy-generated for legacy wallets).
+- Migration: `jobs.provider_wallet_id` nullable (allows external Providers).
+- Audit: 13-dimension pre-launch self-audit ([WEBSITE-AUDIT.md](https://github.com/mrocker/CardZero/blob/main/docs/WEBSITE-AUDIT.md), [PRE-LAUNCH-AUDIT.md](https://github.com/mrocker/CardZero/blob/main/docs/PRE-LAUNCH-AUDIT.md)).
+- Real mainnet E2E: 1 USDC full Job lifecycle ([tx 0xf71ce10c…](https://basescan.org/tx/0xf71ce10c10eb34fcf10cf8f2e8c1ca03f4b85fdba07c65862bb060db990593bd)).
+
+## 2026-05-04 — Sprint 8 ERC-8004 deployment
+
+**Live**: Identity + Reputation registries on Base mainnet.
+
+- New: `CardZeroIdentityRegistry` contract (UUPS).
+- New: `CardZeroReputationRegistry` contract (UUPS, EIP-712 + ERC-1271 dual-path).
+- New: `ReputationService` API with idempotent event recording, retry queue.
+- New: Public endpoints: `/v1/reputation/{wa}`, `/.well-known/agent/{wa}`, `/v1/catalog`.
+- New: Dashboard ReputationCard component.
+- New: Public agent profile pages at `/agent/{walletAddress}`.
+- New: `SCORING-RULES.md` published; hash committed on-chain.
+- New: Daily 04:30 UTC cron syncs unsynced events to chain.
+- New: 4-EOA role isolation (DEPLOYER / REGISTRAR / ATTESTOR / EVALUATOR).
+- 3 agents auto-registered, 5 reputation events backfilled from history.
+
+## 2026-03-29 — MCP Server published
+
+- `cardzero-mcp@0.1.0` on npm (later 0.2.0 with Job tools).
+- 6 → 10 tools: create_wallet, get_balance, send_payment, list_payments, pay_x402, get_payment, **+ create_job, fund_job, submit_job, get_job**.
+- Stdio transport; works in Claude Desktop, Cursor, VS Code, Cline, Continue.
+
+## 2026-03-22 — UUPS upgrade + security audit P0/P1
+
+- Migrated wallets from EIP-1167 minimal proxies to ERC-1967 UUPS upgradeable.
+- Self-audit produced [`SECURITY-REVIEW.md`](https://github.com/mrocker/CardZero/blob/main/docs/SECURITY-REVIEW.md): 3 critical, 9 high, 12 medium, ~10 low. All P0/P1 fixed.
+- Notable fixes: BigInt fee math (was floating-point), policy bypass via approve+transferFrom, claim race condition, EVM empty-address detection on grantSessionKey.
+
+## 2026-03-21 — Sprint 7 — Monitoring + funding UI
+
+- Live: Coinbase Onramp integration (CDP-signed JWT → session token).
+- Live: wagmi-based "Connect wallet" funding flow on Dashboard.
+- Live: SQLite daily backup cron, 7-day retention.
+- Live: `/health` endpoint with deep checks (RPC, paymaster budget, reputation registries, jobs, evaluator ETH, webhook backlog).
+- Live: UptimeRobot monitoring with `ALERT:` keyword.
+- Incident #1 (resolved): production DB overwritten by manual rsync. Created [recovery playbook](https://github.com/mrocker/CardZero/blob/main/CLAUDE.md). Now `deploy.sh` is the only allowed deploy path.
+
+## 2026-03-20 — Production deploy
+
+- Live on Base mainnet.
+- Domain: cardzero.ai (Cloudflare Proxy + Full SSL).
+- API: api.cardzero.ai (PM2 single-instance cluster mode).
+- ClawHub SKILL `cardzero@1.0.0` published.
+- GitHub public repo: [mrocker/CardZero](https://github.com/mrocker/CardZero).
+
+## 2026-03-12 — Sprint 5 — Mainnet contracts + x402
+
+- Smart contract factory + wallet implementation on Base mainnet.
+- 2% platform fee enforced on-chain (capped at 5%).
+- x402 client integration (POST /v1/x402/pay).
+- 33/33 contract unit tests passing.
+
+## 2026-03-09 — Initial alpha
+
+- Project initialization.
+- Base Sepolia testnet deployment.
+- ERC-4337 + permissionless.js + Alchemy bundler/paymaster.
+- Core API E2E: 10/10 tests passing.
+
+## Versioning policy
+
+- **Smart contracts**: V1 → V2 → V3. Each is a new factory deployment; old
+  versions remain functional. Wallets cannot migrate between versions.
+- **API**: `/v1/` is current. `/v2/` will only happen for backward-incompatible
+  changes; we'll keep `/v1/` running for 12 months minimum after `/v2/` ships.
+- **MCP**: semver. v0.x is beta. v1.0 will signal API stability commitment.
+- **ClawHub SKILL**: tracks API version. v1.4.0 = current.
+
+## How to follow updates
+
+- This page (we'll keep it current).
+- [GitHub releases](https://github.com/mrocker/CardZero/releases) for tagged versions.
+- [`@cardzero` on Twitter](https://twitter.com/) (coming soon).
+
+If you depend on a specific contract address or behavior, pin to a specific
+version in your dependencies and check this page before upgrading.

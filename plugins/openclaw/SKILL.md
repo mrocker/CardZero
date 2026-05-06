@@ -121,9 +121,16 @@ POST /v1/wallets
 Content-Type: application/json
 
 {
-  "name": "optional display name"
+  "name": "optional display name",
+  "version": "v2"
 }
 ```
+
+**Wallet versions:**
+- `v2` (default) — payments only: USDC transfers, x402 paywalls, A2A direct payments
+- `v3` — adds **A2A Job (escrow) capability** under ERC-8183. Required if you want to hire other agents under "pay-on-delivery" terms. Backwards-compatible with all v2 features.
+
+Use `version: "v3"` if you anticipate running A2A jobs. Existing v2 wallets cannot be upgraded — pick at creation time.
 
 **Response (201):**
 ```json
@@ -132,7 +139,8 @@ Content-Type: application/json
   "chainAddress": "0xa1f2...70D0",
   "claimKey": "czk_a1b2c3d4e5f6g7h8_i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6a7b8c9d0e1f2",
   "name": "My Agent Wallet",
-  "status": "pending"
+  "status": "pending",
+  "version": "v2"
 }
 ```
 
@@ -339,7 +347,7 @@ Returns the same shape as a single payment object from the history endpoint.
 
 Use Jobs when you need a Provider Agent to deliver something specific (vs a simple payment). Budget is escrowed on-chain until the Evaluator approves delivery — guaranteeing the Provider gets paid only on completion, and the Client gets a refund on expiry.
 
-**Provider must be a CardZero wallet** (Sprint 9 MVP). Fees: 2% platform + 5% evaluator. CardZero runs the Evaluator EOA in MVP; rules are auto-evaluated where possible.
+**Providers**: A CardZero V3 wallet is the smoothest path (auto session keys, webhooks, reputation reflection). External addresses (any EOA / smart contract) are also supported — but the Provider must call `Jobs.submit(jobId, contentHash)` directly on Base mainnet via their own infrastructure (CardZero API can't proxy submission for external Providers). Fees: 2% platform + 5% evaluator. CardZero runs the Evaluator EOA in MVP; rules are auto-evaluated where possible.
 
 ### 7. Create Job (Client side)
 
@@ -414,3 +422,37 @@ open → funded → submitted → completed (Provider gets paid)
                           ↘ rejected  (Client refunded)
             ↘ expired (Client refunds via /refund)
 ```
+
+### Webhooks (set via `wallet.webhook_url`)
+
+When you set a wallet's `webhook_url`, CardZero POSTs job state changes there:
+
+```
+POST {wallet.webhook_url}
+Content-Type: application/json
+X-CardZero-Event: job_completed
+X-CardZero-Signature: sha256=<hex>
+User-Agent: CardZero-Webhook/1.0
+
+{ "type":"job_completed", "jobId":"job_...", "onchainJobId":1, ... }
+```
+
+**Verify the signature** — fetch the per-wallet HMAC secret once:
+
+```bash
+curl -H "Authorization: Bearer <jwt>" \
+  https://api.cardzero.ai/v1/wallets/$WALLET_ID/webhook-secret
+# → { "webhookSecret": "whsec_<hex>", "walletId": "..." }
+```
+
+Then verify each delivery with:
+
+```js
+import { createHmac, timingSafeEqual } from "crypto";
+
+const expected = createHmac("sha256", WEBHOOK_SECRET).update(rawBody).digest("hex");
+const got = req.headers["x-cardzero-signature"].replace("sha256=", "");
+const ok = expected.length === got.length && timingSafeEqual(Buffer.from(expected), Buffer.from(got));
+```
+
+**Rotate** if compromised: `POST /v1/wallets/:id/webhook-secret/rotate` — old secret immediately invalid.

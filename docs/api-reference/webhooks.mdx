@@ -1,0 +1,150 @@
+---
+title: Webhooks
+description: "Event notifications with HMAC-SHA256 signatures."
+---
+
+CardZero POSTs JSON to your URL when a wallet's Jobs change state. You verify
+the signature with the per-wallet webhook secret.
+
+## Configure
+
+The Owner sets `webhook_url` on the wallet (currently via direct DB; self-serve
+endpoint coming). Once set, all subsequent state changes for Jobs the wallet
+participates in trigger a delivery.
+
+**Get the signing secret:**
+
+```bash
+curl https://api.cardzero.ai/v1/wallets/wallet_…/webhook-secret \
+  -H "Authorization: Bearer <jwt>"
+# → { "webhookSecret": "whsec_…", "walletId": "wallet_…" }
+```
+
+The secret is generated at claim time. Lazy-generated for legacy wallets on
+first GET.
+
+**Rotate:**
+
+```bash
+curl -X POST https://api.cardzero.ai/v1/wallets/wallet_…/webhook-secret/rotate \
+  -H "Authorization: Bearer <jwt>"
+```
+
+Old secret immediately invalid.
+
+## Delivery format
+
+```
+POST {wallet.webhook_url}
+Content-Type: application/json
+User-Agent: CardZero-Webhook/1.0
+X-CardZero-Event: job_completed
+X-CardZero-Signature: sha256=<hex>
+
+{
+  "type": "job_completed",
+  "jobId": "job_abc123",
+  "onchainJobId": 1,
+  "walletAddress": "0xa1f2…",
+  "status": "completed",
+  "timestamp": 1715000050
+}
+```
+
+## Event types
+
+| Type | When |
+| --- | --- |
+| `job_created` | Job created (Provider notified) |
+| `job_funded` | Client funded the Job |
+| `job_submitted` | Provider submitted deliverable |
+| `job_completed` | Evaluator approved; funds split |
+| `job_rejected` | Evaluator rejected; refunded |
+| `job_expired` | Past expiry; refunded via claimRefund |
+
+## Verify the signature
+
+```typescript
+import { createHmac, timingSafeEqual } from "crypto";
+
+function verify(rawBody: string, signatureHeader: string, secret: string): boolean {
+  const expected = createHmac("sha256", secret)
+    .update(rawBody)
+    .digest("hex");
+  const received = signatureHeader.replace(/^sha256=/, "");
+  return (
+    expected.length === received.length &&
+    timingSafeEqual(Buffer.from(expected), Buffer.from(received))
+  );
+}
+
+// In your webhook handler:
+const signature = req.headers["x-cardzero-signature"];
+const rawBody = req.rawBody; // critical: use the raw, un-parsed body
+const ok = verify(rawBody, signature, process.env.CARDZERO_WEBHOOK_SECRET);
+if (!ok) return res.status(401).send("Invalid signature");
+// ... process the event
+```
+
+**Critical**: verify against the **raw bytes** of the body, not the parsed JSON.
+Most frameworks (Express, Next.js) re-serialize JSON differently than what
+was sent, breaking the hash.
+
+In Express:
+
+```typescript
+app.use("/cardzero-webhook", express.raw({ type: "application/json" }));
+app.post("/cardzero-webhook", (req, res) => {
+  const rawBody = req.body.toString("utf8");
+  // verify, then JSON.parse(rawBody) for content
+});
+```
+
+In Next.js App Router:
+
+```typescript
+export async function POST(req: Request) {
+  const rawBody = await req.text();
+  // verify, then JSON.parse(rawBody)
+}
+```
+
+## Retry policy
+
+CardZero retries failed deliveries up to 3 times with exponential backoff:
+
+| Attempt | Backoff |
+| --- | --- |
+| 1 | immediate |
+| 2 | 5 seconds |
+| 3 | 30 seconds |
+| 4 | 120 seconds |
+
+After 3 failed attempts → `status='failed'` permanently. The event is **not
+re-tried** — your webhook handler should be reliable.
+
+A delivery is considered successful if your endpoint returns HTTP 2xx within
+the 5-second timeout. Any other status (3xx, 4xx, 5xx) or timeout counts
+as a failure.
+
+## Best practices
+
+- **Respond fast** (≤ 1s ideal). Process the event asynchronously.
+- **Idempotent processing**: the same event might be delivered twice if your
+  endpoint timed out on the first call. Use `jobId + type` as a dedup key.
+- **Verify signatures** on every request. Don't trust the source IP.
+- **Don't expose secrets in logs.** The `X-CardZero-Signature` header is fine
+  to log; the wallet's secret is not.
+- **Drain queue idempotently**: at-least-once delivery is the model.
+
+## Webhook tester (coming soon)
+
+A tool at `cardzero.ai/dashboard/webhooks` to send a test webhook to your
+URL is on the roadmap. For now, manually call your endpoint with mock data
+to test signature verification.
+
+## Errors
+
+| Code | HTTP | When |
+| --- | --- | --- |
+| `WEBHOOK_NO_SECRET` | 400 | Wallet has no webhook_secret yet (lazy-generate by hitting the GET endpoint) |

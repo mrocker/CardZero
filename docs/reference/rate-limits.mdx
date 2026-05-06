@@ -1,0 +1,112 @@
+---
+title: Rate limits
+description: "Per-endpoint quota table; how to handle 429 responses."
+---
+
+CardZero rate-limits at the API layer using `express-rate-limit` keyed on
+either IP (CF-Connecting-IP from Cloudflare) or API Key prefix. Limits are
+**per-instance** (we run a single process today; no distributed limits).
+
+## The table
+
+| Limiter | Window | Max | Key | Endpoints |
+| --- | --- | --- | --- | --- |
+| `walletCreateLimiter` | 1 hour | 50 | IP | `POST /v1/wallets` |
+| `authLimiter` | 1 hour | 10 | IP | `POST /v1/auth/login`, `/v1/auth/claim`, `/v1/auth/change-password` |
+| `paymentLimiter` | 1 minute | 60 | API Key prefix (or IP if no key) | `POST /v1/payments`, `POST /v1/x402/pay`, all 4 `POST /v1/jobs/*` |
+| `onrampLimiter` | 1 hour | 10 | JWT user ID (or IP) | `POST /v1/onramp/session-token` |
+| `reputationLimiter` | 1 minute | 60 | IP | `GET /v1/reputation/*` |
+| `wellKnownLimiter` | 1 minute | 120 | IP | `GET /.well-known/agent/*`, `GET /v1/catalog` |
+
+## Response headers
+
+When you hit a limited endpoint, every response includes:
+
+```
+RateLimit-Policy:    60;w=60
+RateLimit-Limit:     60
+RateLimit-Remaining: 47
+RateLimit-Reset:     30
+```
+
+`RateLimit-Reset` is **seconds until window reset**. After exceeding:
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 23
+Content-Type: application/json
+
+{
+  "error": "RATE_LIMITED",
+  "message": "Too many payment requests. Try again later."
+}
+```
+
+Honor `Retry-After`. Don't busy-loop.
+
+## Rationale per limit
+
+**`walletCreateLimiter`** — 50/hour per IP is generous (one IP creating 50
+wallets/hour is unusual but legitimate for testing). Wallets are lazy-deployed
+so 50 cost ~zero on-chain. If you actually need more, contact us.
+
+**`authLimiter`** — 10/hour blocks credential stuffing. A real user logs in
+once a day; even a forgetful user retries < 5 times.
+
+**`paymentLimiter`** — 60/minute per API Key. That's 1 payment per second
+sustained, with bursts allowed. A real agent doing micro-payments at this
+rate is unusual but legitimate. Lower bar = paymaster cost protection.
+
+**`onrampLimiter`** — 10/hour per user. Coinbase Onramp session tokens are
+short-lived; you don't need many.
+
+**`reputationLimiter`** — 60/minute per IP. A scraper could pull reputation
+data fast; this caps it without blocking real polling use cases.
+
+**`wellKnownLimiter`** — 120/minute per IP. Higher because LLMs / search
+indexers may pull `.well-known/agent/*` aggressively, and that's a feature.
+
+## Handling 429 in code
+
+```typescript
+async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const res = await fetch(url, options);
+    if (res.status !== 429) return res;
+
+    const retryAfter = parseInt(res.headers.get("Retry-After") || "60", 10);
+    console.log(`Rate limited, waiting ${retryAfter}s...`);
+    await new Promise(r => setTimeout(r, retryAfter * 1000));
+  }
+  throw new Error("Max retries reached");
+}
+```
+
+## Behind a shared IP?
+
+If your agent runs on a corporate egress IP shared with many other CardZero
+users, you might trip IP-keyed limits faster than expected. The
+`paymentLimiter` is keyed on **API Key prefix** instead of IP precisely
+to avoid this — so payments shouldn't be affected.
+
+For the auth + wallet-create limiters, contact us if you legitimately need
+higher quota for a known IP range.
+
+## Known headers from Cloudflare
+
+We respect `CF-Connecting-IP` for getting the real client IP behind Cloudflare.
+We **don't** trust `X-Forwarded-For` (potentially spoofed). If you proxy
+requests through your own intermediary, you'll see your intermediary's IP
+in our limits (not your end users').
+
+## Future: distributed rate limiting
+
+Currently single-instance. If we scale to multiple workers, we'll switch
+to Redis-backed limits to share counts across workers. The behavior will
+be identical from the client's perspective.
+
+## Errors
+
+| Code | HTTP | When |
+| --- | --- | --- |
+| `RATE_LIMITED` | 429 | Limit exceeded |

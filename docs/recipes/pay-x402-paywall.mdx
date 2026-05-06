@@ -1,0 +1,134 @@
+---
+title: Pay an x402 paywall
+description: "Your agent calls a paywalled API. The server returns 402. CardZero pays. The agent retries."
+---
+
+This recipe shows the full handshake when an agent calls an x402-protected
+HTTP endpoint.
+
+## The flow
+
+```
+Agent           CardZero API           Server
+  │                  │                    │
+  ├─ GET /data ─────────────────────────▶ │
+  │                  │                    │
+  │ ◀──────────── 402 Payment Required ──┤
+  │      (X-PAYMENT-REQUIRED header)     │
+  │                  │                    │
+  ├─ POST /x402/pay ▶│                    │
+  │  (url, max, recipient, network)      │
+  │                  ├── USDC.transfer ─▶ chain
+  │                  │     (UserOp)        │
+  │ ◀── paymentHeader ┤                    │
+  │                  │                    │
+  ├─ GET /data ─────────────────────────▶ │
+  │  X-PAYMENT: <header>                  │
+  │                  │                    │
+  │ ◀────────── 200 OK + data ────────────┤
+```
+
+## Step-by-step code
+
+```typescript
+const TARGET = "https://example.com/api/expensive-resource";
+const API_KEY = process.env.CARDZERO_API_KEY!;
+
+async function fetchWithX402(url: string): Promise<Response> {
+  // 1. Try without payment first
+  let response = await fetch(url);
+  if (response.status !== 402) {
+    return response; // Either it was free or it failed for some other reason
+  }
+
+  // 2. Parse payment requirements from headers
+  const requirements = parseX402Headers(response.headers);
+  // Headers from x402 spec:
+  //   X-Payment-Required-Network: eip155:8453
+  //   X-Payment-Required-Asset:   0x833589fC...2913
+  //   X-Payment-Required-To:      0xMerchantAddress
+  //   X-Payment-Required-Amount:  500000   (0.50 USDC in microUSDC)
+
+  // 3. Get a payment header from CardZero
+  const payRes = await fetch("https://api.cardzero.ai/v1/x402/pay", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      url,
+      maxAmount: "1.0",                    // Cap at 1 USDC; reject if more
+      recipient: requirements.to,
+      network: requirements.network,
+      asset: requirements.asset,
+      idempotencyKey: `x402-${url}-${Date.now()}`,
+    }),
+  });
+  if (!payRes.ok) throw new Error(`CardZero x402 failed: ${await payRes.text()}`);
+  const { paymentHeader } = await payRes.json();
+
+  // 4. Retry with payment proof
+  response = await fetch(url, {
+    headers: { "X-PAYMENT": paymentHeader },
+  });
+  return response;
+}
+
+// Use it
+const data = await fetchWithX402(TARGET).then(r => r.json());
+console.log(data);
+```
+
+## Helper: parse x402 headers
+
+```typescript
+function parseX402Headers(h: Headers): {
+  network: string;
+  asset: string;
+  to: string;
+  amount: string;
+} {
+  return {
+    network: h.get("x-payment-required-network") || "eip155:8453",
+    asset: h.get("x-payment-required-asset") || "",
+    to: h.get("x-payment-required-to") || "",
+    amount: h.get("x-payment-required-amount") || "0",
+  };
+}
+```
+
+## Common pitfalls
+
+- **Wrong network** — `eip155:8453` is Base mainnet. If the server demands a
+  different chain, CardZero v1 can't pay (Base only). Returns
+  `UNSUPPORTED_NETWORK`.
+- **Wrong asset** — must be Base USDC `0x833589fC…2913`. Other tokens not
+  supported.
+- **`maxAmount` too low** — if the server demands more than your `maxAmount`,
+  CardZero returns `EXCEEDS_MAX_AMOUNT`. Set `maxAmount` based on what you'd
+  actually pay.
+- **Idempotency** — use a unique `idempotencyKey` per logical request. Replay
+  with the same key returns the prior payment, no double-charge.
+
+## Spending rule interplay
+
+The wallet's policy is enforced **on top of** x402:
+
+- Per-tx limit applies. If the server demands $5 and your wallet's per-tx
+  limit is $1, the payment reverts with `TX_LIMIT_EXCEEDED`.
+- Daily limit applies (across all payments, not just x402).
+- Whitelist applies. Add the merchant address to the whitelist before
+  attempting x402 with strict whitelisting enabled.
+
+## Server side: accepting x402 payments
+
+CardZero is the **client side** of x402. To run an x402 server:
+
+- Use Coinbase's [`x402` open-source libraries](https://github.com/coinbase/x402)
+  to demand payment in your HTTP responses.
+- Verify payment proofs server-side (you don't need CardZero for this).
+- Settle: the on-chain USDC.transfer is already in your account when you see
+  the `X-PAYMENT` header (it's a signed `transferWithAuthorization`).
+
+[x402 protocol docs →](https://x402.org)

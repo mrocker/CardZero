@@ -1,0 +1,184 @@
+---
+title: Wallet
+description: "ERC-4337 smart-contract wallets with owner-controlled policy."
+---
+
+A **CardZero wallet** is an [ERC-4337](https://www.erc4337.io/) smart contract
+deployed on Base mainnet. Each agent gets its own wallet. The wallet is
+owned by a human (the **Owner**) but operated by the agent (via a **Session Key**).
+
+## Anatomy
+
+```
+CardZero wallet (smart contract on Base)
+├── Owner               (deployer EOA — represents the human Owner via API)
+├── Session keys        (1–N, time-bounded, scoped, agent uses these)
+├── Policy
+│   ├── txLimit         (max single transaction)
+│   ├── dailyLimit      (max combined per UTC day)
+│   ├── whitelist       (allowed recipient addresses, empty = all)
+│   ├── expiresAt       (wallet stops accepting payments after this date)
+│   └── frozen          (boolean kill-switch)
+└── Fee config
+    ├── feeRate         (basis points, e.g. 200 = 2%)
+    └── feeRecipient    (CardZero treasury)
+```
+
+## Two versions
+
+CardZero ships two wallet versions, deployed by different factories:
+
+| | V2 wallet | V3 wallet |
+| --- | --- | --- |
+| Factory | `0xa3fc38f1…412e` | `0x0c1d37f4…aabb` |
+| Implementation | `0x601b1E85…7470` | `0x70ff1139…2298` |
+| Capabilities | Pay USDC, x402 | Pay USDC, x402, **+ A2A Job escrow** |
+| Session key allow-list | USDC.transfer | USDC.transfer + USDC.approve(Jobs) + Jobs.{create,fund,submit,…} |
+| Upgradeable | Yes (UUPS) | Yes (UUPS) |
+| Recommendation | If you only ever transfer USDC | If you might use ERC-8183 escrow |
+
+**V2 wallets cannot become V3 wallets.** The version is fixed at creation.
+If you start with V2 and later need escrow, create a new V3 wallet and
+transfer balance.
+
+[Compare V2 and V3 →](#v2-vs-v3-deeper-dive)
+
+## Lazy deployment
+
+When you call `POST /v1/wallets`, **no contract is deployed yet**. We compute
+the CREATE2 deterministic address off-chain and return it immediately. The
+contract is deployed only when the Owner claims the wallet.
+
+Why:
+- **Zero gas cost up-front.** Agent can create wallets without burning
+  paymaster credits.
+- **Spam-resistant.** Even if an attacker creates 1M wallets, no on-chain
+  state is created until someone claims.
+- **Address-stable.** The Owner can fund the wallet **before claiming** —
+  funds sit at the predicted address; once deployed, they're immediately
+  accessible.
+
+The flow:
+
+1. `POST /v1/wallets` → returns address + claim key. (Off-chain.)
+2. Owner sends USDC to the predicted address. (On-chain transfer; funds
+   sit at the not-yet-deployed address.)
+3. Owner claims via `/claim`. **Contract gets deployed now**, gas paid by
+   CardZero. Funds become accessible.
+
+## Session keys
+
+The wallet has a **trusted Owner** (deployer EOA, controlled by CardZero
+on behalf of the human Owner via API). The Owner can grant **session keys**
+that the agent uses to sign UserOperations.
+
+Session key properties:
+- ECDSA private key, generated server-side, **AES-256-GCM encrypted in DB**.
+- Bound to a single wallet.
+- Time-bounded (default 30 days, auto-renewed).
+- Subject to the wallet's policy (limit, daily, whitelist, freeze).
+- **Restricted to specific calls**:
+  - V2 wallet: only `USDC.transfer(to, amount)`
+  - V3 wallet: also `USDC.approve(Jobs, ≤1000)`, `Jobs.createJob`, `Jobs.fund`,
+    `Jobs.submit`, `Jobs.declineJob`, `Jobs.claimRefund`
+
+A session key **cannot**:
+- Bypass the wallet's spending policy
+- Transfer the wallet's owner
+- Upgrade the wallet (UUPS upgrade is admin-only)
+- Approve unlimited spend on USDC
+
+If a session key leaks: rotate the API key (auto-revokes the session key),
+or freeze the wallet (instant lockdown).
+
+## Policy enforcement
+
+Policy is enforced **on-chain** in `_validatePolicyV3` (V3) or `validateUserOp`
+(V2) before the call executes.
+
+```
+User calls Jobs.createJob via session key
+    ▼
+Wallet validateUserOp
+    ▼
+Recover signer from signature
+    ▼
+Is signer the Owner?  → skip policy, execute as owner
+Is signer an active session key? → enforce policy ▼
+                                   ▼
+                                  Daily spend + tx amount check
+                                  Whitelist check (if non-empty)
+                                  Frozen check
+                                  Call target allow-list (V3 only)
+                                   ▼
+                                  Pass → execute
+                                  Fail → revert
+```
+
+**This is enforced by the EVM, not by CardZero servers.** Even with full
+access to our database and codebase, CardZero engineers can't move funds
+beyond what the policy allows.
+
+## Fees
+
+Every payment incurs a **2% platform fee** deducted from the wallet's
+balance (in addition to the payment amount).
+
+- Payment of $5 USDC → recipient gets exactly $5, wallet is debited $5.10.
+- The $0.10 fee goes to `feeRecipient` (CardZero treasury).
+- Capped at 5% (500 bp) by contract; current rate is 2% (200 bp).
+- The fee is independent of any Job-escrow fees (which are 2% + 5% on completion).
+
+You can read the fee rate and recipient on-chain at any time:
+```
+walletContract.feeRate()       → 200
+walletContract.feeRecipient()  → 0x41a4…91da
+```
+
+## V2 vs V3 deeper dive
+
+V3 inherits all of V2's behavior; the only differences:
+
+1. **Storage**: V3 adds two storage slots (`cardZeroJobsContract` +
+   `usdcAddress`). Storage gap reduced accordingly. Layout is forward-
+   compatible — a future V4 can extend V3.
+
+2. **Session-key call allow-list**:
+   ```solidity
+   function _validatePolicyV3(address to, bytes calldata data) {
+       if (to == USDC) {
+           // V2 already allowed transfer. V3 also allows approve(Jobs, ≤1000)
+           if (selector == APPROVE_SELECTOR) {
+               require(spender == cardZeroJobsContract, "approve target");
+               require(amount <= 1000e6, "approve cap");
+           }
+       } else if (to == cardZeroJobsContract) {
+           // V3-only: allow agent-side Job ops
+           require(selector in {createJob, fund, submit, declineJob, claimRefund});
+       }
+   }
+   ```
+
+3. **Factory**: V3 uses `CardZeroFactoryV3` with a different CREATE2 salt
+   namespace. Same owner + salt produces a **different address** for V2
+   vs V3 — they're separate wallet identities.
+
+## Owner ↔ wallet ↔ agent
+
+Three actors, three identities, three sets of permissions:
+
+| Actor | Identity | Can do |
+| --- | --- | --- |
+| **Owner** (human) | username + password → JWT | Set rules, freeze, view, fund, claim more wallets |
+| **Wallet** (smart contract) | n/a — it's the asset | Holds USDC, enforces policy |
+| **Agent** (your AI) | API Key (`czapi_…`) | Make payments, run jobs (within policy) |
+
+Notably, the Agent **never sees**:
+- The wallet's session key private key
+- The Owner's password / JWT
+- The Owner's email or any PII
+- The on-chain owner's signing key
+
+If the Agent's API Key leaks, the attacker can only do what the policy allows
+within the daily limit until the Owner rotates the key (instant) or freezes
+(instant). They cannot transfer ownership, change rules, or upgrade the wallet.

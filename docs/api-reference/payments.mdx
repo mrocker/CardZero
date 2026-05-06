@@ -1,0 +1,117 @@
+---
+title: Payments
+description: "Send USDC; query payment status."
+---
+
+Base URL: `https://api.cardzero.ai/v1`
+
+## Send payment
+
+<ParamField path="POST /payments" />
+
+API Key required. Rate-limited at 60/min per API Key.
+
+**Body:**
+
+```json
+{
+  "to": "0xRecipient…",
+  "amount": "1.0",
+  "currency": "USDC",
+  "memo": "optional note",
+  "idempotencyKey": "optional-uuid",
+  "type": "direct"
+}
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `to` | string | yes | EVM address, 0x-prefixed, 40 hex chars |
+| `amount` | string | yes | Decimal USDC, max 6 decimals (e.g. "1.5", "0.001") |
+| `currency` | string | yes | Must be "USDC" |
+| `memo` | string | no | Free-form, ≤ 200 chars |
+| `idempotencyKey` | string | no | Use to prevent duplicate charges on retry |
+| `type` | "direct" \| "x402" | no | Default "direct"; "x402" tags the payment for filtering |
+
+**Response 200:**
+
+```json
+{
+  "id": "pay_abc123def456",
+  "txHash": "0x…",
+  "status": "confirmed",
+  "amount": "1.0",
+  "feeAmount": "0.02",
+  "to": "0xRecipient…",
+  "type": "direct"
+}
+```
+
+`status` values: `pending`, `confirmed`, `failed`.
+
+The recipient gets the **full** `amount`. The wallet is debited
+`amount + feeAmount` (e.g. wallet -1.02 USDC, recipient +1.0 USDC, treasury +0.02 USDC).
+
+## Get payment
+
+<ParamField path="GET /payments/:paymentId" />
+
+No authentication. Payment IDs are unguessable (random 12-char hex).
+
+**Response 200:**
+
+```json
+{
+  "id": "pay_abc123def456",
+  "wallet_id": "wallet_…",
+  "to_address": "0x…",
+  "amount": "1.0",
+  "type": "direct",
+  "memo": "optional",
+  "status": "confirmed",
+  "tx_hash": "0x…",
+  "fee_amount": "0.02",
+  "fee_recipient": "0x41a4…91da",
+  "created_at": 1715000000
+}
+```
+
+## List payments for wallet
+
+<ParamField path="GET /wallets/:id/payments" />
+
+JWT or API Key. Pagination via `?limit` + `?offset`.
+
+**Query params:**
+
+| Param | Default | Max |
+| --- | --- | --- |
+| `limit` | 20 | 100 |
+| `offset` | 0 | — |
+
+**Response 200:**
+
+```json
+{
+  "payments": [ /* same shape as Get payment */ ]
+}
+```
+
+## Errors
+
+| Code | HTTP | When |
+| --- | --- | --- |
+| `UNSUPPORTED_CURRENCY` | 400 | currency != "USDC" |
+| `INVALID_AMOUNT` | 400 | amount format invalid or ≤ 0 |
+| `INVALID_ADDRESS` | 400 | recipient address malformed |
+| `WALLET_BUSY` | 409 | another payment in progress for same wallet |
+| `INSUFFICIENT_BALANCE` | 400 | wallet doesn't have enough USDC |
+| `WALLET_FROZEN` | 400 | wallet is frozen |
+| `TX_LIMIT_EXCEEDED` | 400 | amount exceeds per-tx limit |
+| `DAILY_LIMIT_EXCEEDED` | 400 | sum of today's payments would exceed daily limit |
+| `NOT_IN_WHITELIST` | 400 | recipient not in whitelist (when whitelist is non-empty) |
+| `WALLET_EXPIRED` | 400 | past wallet's expiresAt |
+| `INVALID_API_KEY` | 401 | API key not recognized |
+
+Idempotency: if you send the same `idempotencyKey` twice for the same wallet,
+the second call returns the **first** payment's record (no double-charge).

@@ -1,0 +1,97 @@
+---
+title: x402 (HTTP 402 payment)
+description: "Native support for the HTTP 402 Payment Required protocol — agents pay paywalled APIs automatically."
+---
+
+[x402](https://x402.org) is a Coinbase-led standard for **HTTP-level micro-
+payments**. When a server returns `402 Payment Required` with payment details,
+the client pays and retries. CardZero implements x402 client-side so your
+agent can transact without manual payment plumbing.
+
+## The protocol in 60 seconds
+
+1. Agent makes a request: `GET https://example.com/data`
+2. Server checks: not paid → returns `HTTP 402 Payment Required` with payment
+   details in headers (USDC amount, recipient address, network).
+3. Agent's CardZero integration constructs a USDC payment, signs it,
+   includes the payment proof in `X-PAYMENT` header, retries.
+4. Server verifies payment, returns `HTTP 200` + the data.
+
+All in milliseconds. No human in the loop. No prior account.
+
+## CardZero's x402 implementation
+
+The `POST /v1/x402/pay` endpoint:
+
+```bash
+curl -X POST https://api.cardzero.ai/v1/x402/pay \
+  -H "Authorization: Bearer $CARDZERO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com/api/data",
+    "maxAmount": "1.0",
+    "recipient": "0xMerchantAddress",
+    "network": "eip155:8453",
+    "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+  }'
+```
+
+Returns:
+
+```json
+{
+  "paymentId": "pay_x402_…",
+  "txHash": "0x…",
+  "paymentHeader": "x402.v1.eip155:8453.…",
+  "status": "confirmed",
+  "amount": "0.50"
+}
+```
+
+The agent then includes `X-PAYMENT: <paymentHeader>` when retrying the
+original request.
+
+## When you'd use x402
+
+- **Paywalled APIs**: provider wants `$0.001` per call from autonomous agents.
+- **Per-request data feeds**: news, market data, web scraping APIs.
+- **Compute on demand**: pay-per-inference LLM endpoints.
+- **Content unlocks**: per-article paywalls, subscription bypasses.
+
+## Differences from direct payment
+
+| | x402 | Direct payment |
+| --- | --- | --- |
+| Endpoint | `POST /v1/x402/pay` | `POST /v1/payments` |
+| Triggers | HTTP 402 response | Application logic |
+| Result | Payment header for retry | Plain confirmation |
+| Use case | Server-mediated paywall | Send USDC anywhere |
+
+Both fully respect wallet spending rules. Both are 2% fee on the platform side.
+
+## Spec compliance
+
+CardZero implements x402 v1:
+
+- ✅ `eip155:8453` (Base mainnet)
+- ✅ USDC asset (`0x833589fC…2913`)
+- ✅ Standard `X-PAYMENT` header format
+- ✅ ERC-3009 transferWithAuthorization signature
+- ✅ Verifiable on-chain by recipient
+
+What we don't yet support (P2):
+
+- ❌ Other chains (would require additional contract deployments)
+- ❌ Other ERC-20s besides USDC
+- ❌ Subscription / recurring payment flow (x402 v2 draft)
+
+## Best practices
+
+- **Set `maxAmount` lower than the wallet's per-tx limit.** If a server
+  demands more, the call fails fast at the rule level.
+- **Use a strict whitelist** if you only pay known providers.
+- **Idempotency**: x402 payments include an `idempotencyKey` to prevent
+  double-charging on retry.
+- **Audit `txHash`**: always verifiable on Basescan.
+
+[Recipe: pay an x402 paywall →](/recipes/pay-x402-paywall)

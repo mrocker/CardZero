@@ -1,12 +1,24 @@
 ---
 name: cardzero
-version: 1.1.0
-description: CardZero Agent Wallet — create wallets, check balance, execute USDC payments, view transaction history
-tags: [payment, wallet, usdc, web3, agent]
+version: 1.4.0
+description: "CardZero — the first payment wallet built for AI agents. Create USDC wallets on Base L2, make payments, pay x402 paywalls, pay other agents, check balance, view transactions, and run A2A jobs with on-chain escrow (ERC-8183). Human owner sets spending rules via Dashboard; agent pays autonomously within limits. Use when agent needs to: 'pay for API access', 'send USDC', 'pay 402 paywall', 'create a wallet', 'check my balance', 'make a payment', 'buy with crypto', 'agent wallet', 'autonomous payment', 'micropayment', 'pay another agent', 'agent-to-agent payment', 'A2A payment', 'hire another agent', 'job escrow', 'pay on delivery'."
+tags: [payment, wallet, usdc, web3, agent, x402, base, micropayment, autonomous, crypto, a2a, escrow, erc-8183, job]
 requires:
   - CARDZERO_API_URL: CardZero API base URL (e.g. https://api.cardzero.ai)
   - CARDZERO_API_KEY: Your API Key (received from Owner after they claim the wallet)
   - CARDZERO_WALLET_ID: Your wallet ID (set after wallet creation)
+metadata:
+  openclaw:
+    requires:
+      env:
+        - CARDZERO_API_URL
+        - CARDZERO_API_KEY
+        - CARDZERO_WALLET_ID
+      bins:
+        - curl
+    primaryEnv: CARDZERO_API_KEY
+    emoji: "\U0001F4B3"
+    homepage: https://cardzero.ai
 ---
 
 # CardZero Payment Wallet
@@ -19,8 +31,11 @@ You have a CardZero payment wallet on Base (Coinbase L2). This wallet holds USDC
 
 1. **Create a new wallet** — Register a wallet for your Owner to claim
 2. **Check balance** — Query your current USDC balance
-3. **Make payments** — Send USDC to any address
-4. **View payment history** — See recent transactions
+3. **Make payments** — Send USDC to any address (merchants, services, or other agents)
+4. **Pay x402 paywalls** — Automatically pay for HTTP 402-protected resources
+5. **Agent-to-agent payments** — Pay another CardZero agent directly by their wallet address
+6. **View payment history** — See recent transactions
+7. **A2A Jobs (ERC-8183)** — Hire another CardZero agent under on-chain escrow: budget locks until deliverable is approved by an Evaluator. Built-in 2% platform fee + 5% evaluator fee.
 
 ## Authentication
 
@@ -317,3 +332,85 @@ GET /v1/payments/{paymentId}
 ```
 
 Returns the same shape as a single payment object from the history endpoint.
+
+---
+
+## A2A Jobs (ERC-8183 escrow) — v1.4.0
+
+Use Jobs when you need a Provider Agent to deliver something specific (vs a simple payment). Budget is escrowed on-chain until the Evaluator approves delivery — guaranteeing the Provider gets paid only on completion, and the Client gets a refund on expiry.
+
+**Provider must be a CardZero wallet** (Sprint 9 MVP). Fees: 2% platform + 5% evaluator. CardZero runs the Evaluator EOA in MVP; rules are auto-evaluated where possible.
+
+### 7. Create Job (Client side)
+
+```bash
+curl -X POST "$CARDZERO_API_URL/v1/jobs" \
+  -H "Authorization: Bearer $CARDZERO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "providerAddress": "0xabc...",
+    "budgetUsdc": "10000000",
+    "expiredAt": 1715000000,
+    "title": "Translate report to Japanese",
+    "description": "Output JSON {translated: string} matching schema",
+    "evaluatorRule": {
+      "type": "http_check",
+      "url": "https://provider.example.com/output",
+      "expectedStatus": 200
+    }
+  }'
+```
+
+Response: `{ jobId, onchainJobId, metadataHash, createTxHash }`. Job is in `open` state; budget is NOT yet locked.
+
+### 8. Fund Job (Client side)
+
+```bash
+curl -X POST "$CARDZERO_API_URL/v1/jobs/$JOB_ID/fund" \
+  -H "Authorization: Bearer $CARDZERO_API_KEY"
+```
+
+Locks `budgetUsdc` from your wallet. Status: `open` → `funded`. Two on-chain UserOps (USDC.approve + Jobs.fund).
+
+### 9. Submit Deliverable (Provider side)
+
+```bash
+curl -X POST "$CARDZERO_API_URL/v1/jobs/$JOB_ID/submit" \
+  -H "Authorization: Bearer $CARDZERO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contentHash": "0xa1b2c3...",
+    "contentURI": "https://example.com/deliverable.json"
+  }'
+```
+
+`contentHash` is keccak256 of canonical content. Status: `funded` → `submitted`. Evaluator auto-runs and finalizes within minutes (cron + on-demand).
+
+### 10. Check Job
+
+**No authentication required.**
+
+```bash
+curl "$CARDZERO_API_URL/v1/jobs/$JOB_ID"
+```
+
+Returns full Job state: status, evaluation outcome, all four lifecycle tx hashes.
+
+### 11. Refund Expired Job (Client side)
+
+If Provider doesn't deliver before `expiredAt`:
+
+```bash
+curl -X POST "$CARDZERO_API_URL/v1/jobs/$JOB_ID/refund" \
+  -H "Authorization: Bearer $CARDZERO_API_KEY"
+```
+
+Returns full budget. Only works post-expiry.
+
+### Job lifecycle
+
+```
+open → funded → submitted → completed (Provider gets paid)
+                          ↘ rejected  (Client refunded)
+            ↘ expired (Client refunds via /refund)
+```

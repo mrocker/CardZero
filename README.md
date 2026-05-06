@@ -1,9 +1,10 @@
 # CardZero
 
-[![ClawHub](https://img.shields.io/badge/ClawHub-cardzero%40v1.3.0-blue)](https://clawhub.ai/mrocker/cardzero)
+[![ClawHub](https://img.shields.io/badge/ClawHub-cardzero%40v1.4.0-blue)](https://clawhub.ai/mrocker/cardzero)
 [![npm](https://img.shields.io/npm/v/cardzero-mcp)](https://www.npmjs.com/package/cardzero-mcp)
 [![Base](https://img.shields.io/badge/Chain-Base%20L2-0052FF)](https://base.org)
 [![x402](https://img.shields.io/badge/Protocol-x402-green)](https://x402.org)
+[![ERC-8004](https://img.shields.io/badge/A2A-ERC--8004%20%2B%20ERC--8183-purple)](https://eips.ethereum.org)
 [![USDC](https://img.shields.io/badge/Currency-USDC-2775CA)](https://www.circle.com/usdc)
 
 **The first universal payment wallet for AI Agents.**
@@ -81,12 +82,36 @@ Base URL: `https://api.cardzero.ai/v1`
 | Payment history | `GET` | `/wallets/{id}/payments` | API Key |
 | x402 payment | `POST` | `/x402/pay` | API Key |
 | Payment status | `GET` | `/payments/{id}` | None |
+| **Create Job** (A2A escrow) | `POST` | `/jobs` | API Key |
+| **Fund Job** | `POST` | `/jobs/{id}/fund` | API Key |
+| **Submit deliverable** | `POST` | `/jobs/{id}/submit` | API Key |
+| **Check Job state** | `GET` | `/jobs/{id}` | None |
+| **Reputation** (ERC-8004) | `GET` | `/reputation/{walletAddress}` | None |
+| **Catalog** | `GET` | `/catalog` | None |
 
 Authentication: `Authorization: Bearer czapi_...`
 
-A 2% service fee is deducted from the wallet on each payment. For example, a $5.00 payment costs $5.10 total ($5.00 to the recipient + $0.10 fee).
+**Pricing:**
+- Direct payments: 2% service fee (recipient gets full amount, fee deducted from wallet)
+- Job escrow: 2% platform fee + 5% evaluator fee (split on Job completion)
 
 For complete API documentation, see [`openapi.yaml`](openapi.yaml).
+
+## A2A Escrow (ERC-8183) — v1.4.0
+
+CardZero is the first non-token-gated implementation of ERC-8004 (Identity + Reputation) and ERC-8183 (Job lifecycle escrow). Use Jobs when you need a Provider Agent to deliver something specific:
+
+```
+1. Client → POST /jobs            (creates Job, status='open')
+2. Client → POST /jobs/{id}/fund  (locks budget USDC, status='funded')
+3. Provider → POST /jobs/{id}/submit  (posts deliverable hash, status='submitted')
+4. Evaluator (CardZero EOA) auto-runs → split funds + reputation event
+   - approved: provider 93% + evaluator 5% + platform 2%
+   - rejected: full refund to client
+5. (or) After expiry: Client → POST /jobs/{id}/refund
+```
+
+All four lifecycle transitions are anchored on Base mainnet with on-chain reputation reflection.
 
 ## Dashboard
 

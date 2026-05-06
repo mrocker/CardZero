@@ -556,6 +556,188 @@ paths:
                         type: string
                         example: x402
 
+  /jobs:
+    post:
+      summary: Create a Job (ERC-8183 escrow)
+      description: |
+        Creates a Job that escrows USDC payment until a Provider delivers and an Evaluator approves.
+        Sprint 9 MVP requires the Provider to be a CardZero wallet. Status starts as `open`.
+        Fees: 2% platform + 5% evaluator (deducted on completion).
+      tags: [Jobs]
+      security:
+        - BearerApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [providerAddress, budgetUsdc, expiredAt, title, description, evaluatorRule]
+              properties:
+                providerAddress:
+                  type: string
+                  example: "0xabc1234567890abcdef1234567890abcdef12345"
+                budgetUsdc:
+                  type: string
+                  example: "10000000"
+                  description: Budget in microUSDC (6 decimals). 10000000 = $10 USDC.
+                expiredAt:
+                  type: integer
+                  description: Unix seconds. Min 86400 from now (1 day).
+                  example: 1715000000
+                title:
+                  type: string
+                  example: "Translate report to Japanese"
+                description:
+                  type: string
+                  example: "Output JSON {translated: string}"
+                evaluatorRule:
+                  type: object
+                  required: [type]
+                  properties:
+                    type:
+                      type: string
+                      enum: [manual, json_schema, http_check]
+                    url:
+                      type: string
+                    expectedStatus:
+                      type: integer
+                    timeoutMs:
+                      type: integer
+                idempotencyKey:
+                  type: string
+      responses:
+        "201":
+          description: Job created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId:
+                    type: string
+                    example: job_abc123def456
+                  onchainJobId:
+                    type: integer
+                    example: 1
+                  metadataHash:
+                    type: string
+                  createTxHash:
+                    type: string
+
+  /jobs/{jobId}:
+    get:
+      summary: Get Job state
+      description: Public — Job state (status, txs, evaluation outcome). No auth.
+      tags: [Jobs]
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Job details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+
+  /jobs/{jobId}/fund:
+    post:
+      summary: Fund a Job (Client side)
+      description: Locks budget USDC into escrow. Requires `open` status. Two on-chain UserOps (USDC.approve + Jobs.fund).
+      tags: [Jobs]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Funded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: funded
+                  fundTxHash:
+                    type: string
+
+  /jobs/{jobId}/submit:
+    post:
+      summary: Submit deliverable (Provider side)
+      description: Posts deliverable hash on-chain; Evaluator auto-evaluates within minutes. Status funded → submitted.
+      tags: [Jobs]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contentHash]
+              properties:
+                contentHash:
+                  type: string
+                  description: keccak256 of deliverable canonical content (0x + 64 hex)
+                contentURI:
+                  type: string
+      responses:
+        "200":
+          description: Submitted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: submitted
+                  submitTxHash:
+                    type: string
+
+  /jobs/{jobId}/refund:
+    post:
+      summary: Claim refund for expired Job (Client side)
+      description: Returns full budget to Client wallet. Only works after `expiredAt`.
+      tags: [Jobs]
+      security:
+        - BearerApiKey: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Refunded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: expired
+                  refundTxHash:
+                    type: string
+
 components:
   securitySchemes:
     BearerJWT:
@@ -658,6 +840,64 @@ components:
           type: string
         feeAmount:
           type: string
+
+    Job:
+      type: object
+      properties:
+        id:
+          type: string
+        onchain_job_id:
+          type: integer
+          nullable: true
+        client_wallet_id:
+          type: string
+        provider_wallet_id:
+          type: string
+        provider_address:
+          type: string
+        evaluator_address:
+          type: string
+        budget_usdc:
+          type: string
+          description: microUSDC (6 decimals)
+        status:
+          type: string
+          enum: [open, funded, submitted, completed, rejected, expired]
+        expired_at:
+          type: integer
+        metadata_uri:
+          type: string
+        metadata_hash:
+          type: string
+        deliverable_uri:
+          type: string
+          nullable: true
+        deliverable_hash:
+          type: string
+          nullable: true
+        evaluator_rule_type:
+          type: string
+          nullable: true
+        evaluation_outcome:
+          type: string
+          nullable: true
+        evaluation_reason:
+          type: string
+          nullable: true
+        create_tx_hash:
+          type: string
+          nullable: true
+        fund_tx_hash:
+          type: string
+          nullable: true
+        submit_tx_hash:
+          type: string
+          nullable: true
+        finalize_tx_hash:
+          type: string
+          nullable: true
+        created_at:
+          type: integer
 
     Error:
       type: object

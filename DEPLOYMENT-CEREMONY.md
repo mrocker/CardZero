@@ -214,6 +214,68 @@ Each step is a separate tx, individually visible on Basescan, in this order. Ste
 
 Tracked in `docs/MULTISIG-TIMELOCK-MIGRATION.md` (execution plan + scripts).
 
+### 6.1 Staged rollout — transparent disclosure
+
+CardZero's migration to Safe + Timelock happens in two stages. We're stating both stages publicly so peer protocol teams and auditors can evaluate the actual threat model, not the marketing version.
+
+**Stage 1 (launch):** Single-principal 2-of-3 Safe with hard isolation.
+
+- All three Safe signer keys held by Nicholas
+- Three independent hardware wallets (mixed manufacturers: Ledger + Trezor, no shared firmware surface)
+- Three independent physical storage locations
+- Two independent workstation environments — different machines, isolated browser profiles, no shared wallet extension state
+- Three seed phrases generated at separate times, written to paper, stored in different geographic locations
+
+**What this defeats:**
+- Remote single-machine compromise (each machine only has access to one key)
+- Single physical-location compromise (other two keys are elsewhere)
+- Loss of one hardware wallet (other two can administer + queue a rotation)
+
+**What this does NOT defeat (honest acknowledgement):**
+- Coercion of Nicholas (single principal)
+- Social engineering of Nicholas (single decision-maker)
+- Loss of all three storage locations simultaneously
+- Legal compulsion (single legal entity holds all keys)
+
+Auditors should classify this as **"single-principal 2-of-3 multisig with hard physical and machine isolation"** — strictly stronger than a single EOA, materially weaker than independent-principal multisig.
+
+**Stage 2 (T+90 days from launch):** Independent-principal 2-of-3 Safe.
+
+One of the three Safe signer keys is rotated to an external **passive signer** — an independent natural person who:
+- Physically holds one hardware wallet (set up by Nicholas, transferred for ongoing custody)
+- Is not required to understand cryptography or operate independently
+- Executes signatures only in response to live communication from Nicholas
+- Holds an anti-coercion safe word that, if spoken by Nicholas, signals "do not sign"
+
+Rotation is executed via the Safe's `swapOwner(prevOwner, oldOwner, newOwner)` function. Old key is destroyed.
+
+**What this additionally defeats:**
+- Coercion of Nicholas alone (passive signer's independent custody means an attacker controlling Nicholas cannot force the second signature)
+- Social engineering of Nicholas alone (passive signer's safe word verification catches it)
+- Single-principal legal compulsion (passive signer is a separate legal entity)
+
+**Public commitment:** Stage 2 timeline is documented in `docs/MULTISIG-TIMELOCK-MIGRATION.md`. We will post a thread-update to the magicians forum confirming Stage 2 execution with the Basescan tx links. If Stage 2 slips beyond 120 days from launch we will publicly explain why.
+
+### 6.2 Operational implications during Stage 1
+
+While in Stage 1, the following apply:
+
+- Code4rena audit scope includes the single-principal risk as a known finding (not a discovery)
+- Public-facing communications do not claim "multisig" without the "single-principal" qualifier
+- Pause role is held by a fourth independent hardware wallet (see §6.3) for fast incident response
+- Any deployment of new contract families pre-Stage 2 reuses the same disclosure
+
+### 6.3 Pauser role separation
+
+Each upgradeable contract supports `pause()` as a monotonic-toward-safety operation (freeze only, no fund movement). The pauser role is held by **a separate hardware wallet** distinct from the three Safe signers — a fourth independent device. Rationale:
+
+- Pause is the appropriate response to a discovered active exploit
+- Running pause through the 48h timelock would be too slow (funds drained before the queued tx executes)
+- Pause cannot be used adversarially to extract funds — worst case is contract operations are halted, which is exactly the safety property we want
+- Compromise of the pauser key alone causes no fund loss; recovery is via Safe granting pause to a new key
+
+The pauser key shares the machine-isolation discipline of the Safe signers (separate workstation, separate browser profile, separate physical location).
+
 ---
 
 ## 7. Post-deploy operations as separated transactions

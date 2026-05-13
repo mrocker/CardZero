@@ -1,0 +1,267 @@
+---
+title: Deployment ceremony
+description: "How CardZero's on-chain components are deployed and operated on Base mainnet. For peer protocol teams, auditors, and integrators."
+---
+
+Public-facing record of how CardZero's on-chain components are deployed and
+operated on Base mainnet. Written for peer protocol teams, auditors, and
+integrators evaluating the operational threat model.
+
+**Last updated:** 2026-05-13
+
+## Principles
+
+1. **Deterministic addresses.** Every wallet address is predictable from
+   `(owner, agentSalt)` before any chain interaction. Clients can be told
+   "your wallet is `0x…`" and pre-fund it before the contract is deployed.
+2. **Idempotent deployment.** Re-calling `createWallet` with the same inputs
+   is a no-op, not a revert. A bundler retry or paymaster replay cannot
+   create a divergent state.
+3. **Role isolation.** Privileged operations are split across four EOAs that
+   never share a private key with any other role.
+4. **Frozen commitments.** Reputation scoring rules are committed on-chain
+   as a `keccak256` hash of a public document. Any post-hoc change is
+   detectable by recomputing.
+5. **Sepolia full-lifecycle gate.** No mainnet deployment lands without the
+   same end-to-end flow having run green on Sepolia.
+6. **Separated post-deploy operations.** Role grants, registry wiring, and
+   admin handoffs each happen as their own transaction, so each is
+   independently inspectable on Basescan.
+
+## Deterministic CREATE2 salt
+
+The wallet factory uses OpenZeppelin's `Create2.deploy` over an
+`ERC1967Proxy` constructor. The user-facing salt is composed:
+
+```solidity
+// CardZeroFactory.createWallet (and CardZeroFactoryV3.createWallet)
+bytes32 finalSalt = keccak256(abi.encodePacked(owner, agentSalt));
+
+bytes memory initData = abi.encodeCall(
+    CardZeroWallet.initialize,
+    (owner, feeRate, feeRecipient)
+);
+
+bytes memory proxyBytecode = abi.encodePacked(
+    type(ERC1967Proxy).creationCode,
+    abi.encode(address(walletImplementation), initData)
+);
+
+address predicted = Create2.computeAddress(finalSalt, keccak256(proxyBytecode));
+
+// Idempotent — re-call returns the same address without redeploying
+if (predicted.code.length > 0) return predicted;
+
+wallet = Create2.deploy(0, finalSalt, proxyBytecode);
+```
+
+### Salt composition rationale
+
+- **`owner` is part of the salt.** Two different owners passing the same
+  `agentSalt` get two different addresses. Salt collisions across owners
+  are impossible.
+- **`agentSalt` is a per-wallet client-side identifier.** CardZero's API
+  generates this as a random 32-byte value at wallet-creation request time
+  and stores it in the off-chain DB.
+- **`abi.encodePacked` (not `abi.encode`).** 32-byte `agentSalt` + 20-byte
+  `owner` packs to exactly 52 bytes with no padding ambiguity.
+- **Fee params are NOT in the salt** but ARE in `initData`, which IS hashed
+  into the CREATE2 calculation via `keccak256(proxyBytecode)`. So changing
+  `feeRate` or `feeRecipient` changes the predicted address — the same
+  `(owner, agentSalt)` pair maps to different addresses on different fee
+  configurations. By design: it makes fee rates a frozen-at-deploy
+  commitment per wallet.
+
+### Pre-deployment prediction
+
+API clients call
+`Factory.getWalletAddress(owner, agentSalt, feeRate, feeRecipient) returns (address)`
+as a `view` function. No chain state is mutated. Owner can pre-fund the
+predicted address with USDC; ERC-4337 sponsors the eventual deployment via
+the bundler on first userOp.
+
+### Idempotency guarantee
+
+```solidity
+if (predicted.code.length > 0) return predicted;
+```
+
+Re-calling `createWallet` for an already-deployed wallet returns the
+existing address without consuming the `CREATE2` opcode. This protects
+against bundler retries during paymaster failures, concurrent claim
+attempts from the same client, and cross-region API instances both
+attempting deployment.
+
+A divergent state is impossible because there's only one valid bytecode
+hash for any `(owner, agentSalt, feeRate, feeRecipient)` tuple.
+
+### Why not direct `CREATE` with `nonce`?
+
+`CREATE` addresses depend on the deployer's nonce, which is a global
+counter on the factory account. That makes pre-deployment prediction
+fragile (any other deploy increments the nonce and invalidates the
+prediction). `CREATE2` keeps the predicted address stable regardless of
+unrelated factory activity.
+
+## EOA role isolation (4-key model)
+
+Four mainnet EOAs, each with a single role, generated independently and
+never sharing a key:
+
+| Role | Address | Holds | Notes |
+| --- | --- | --- | --- |
+| **DEPLOYER** | `0x79985809…018edce` | `ADMIN_ROLE` on all UUPS contracts | Currently single-key. Multisig + Timelock migration is the next pre-audit step. |
+| **REGISTRAR** | `0xfd865c3C…EED51` | `REGISTRAR_ROLE` on IdentityRegistry | Calls `register()`. Cannot transfer USDC. |
+| **ATTESTOR** | `0xf76a7a56…a1D4` | `ATTESTOR_ROLE` on ReputationRegistry | Writes reputation events. Cannot transfer USDC. |
+| **EVALUATOR** | `0x8157Cb8e…0E59` | `EVALUATOR_ROLE` on Jobs | Calls `evaluatorComplete()` / `evaluatorReject()`. Cannot withdraw escrow. |
+
+### Properties verified at deploy time
+
+The deploy script's self-check enforces:
+
+1. `DEPLOYER` does **not** hold `REGISTRAR_ROLE`, `ATTESTOR_ROLE`, or
+   `EVALUATOR_ROLE` on any contract.
+2. `REGISTRAR` holds *only* `REGISTRAR_ROLE`.
+3. `ATTESTOR` holds *only* `ATTESTOR_ROLE`.
+4. `EVALUATOR` holds *only* `EVALUATOR_ROLE`.
+5. No EOA holds USDC at deploy completion.
+6. Each role's `getRoleMemberCount` is exactly 1.
+
+The script aborts if any check fails.
+
+### Blast-radius bounds
+
+- **REGISTRAR compromise:** can register arbitrary agent identities. Cannot
+  affect existing reputation scores or move funds.
+- **ATTESTOR compromise:** can write reputation events. Cannot register
+  agents or move funds.
+- **EVALUATOR compromise:** can complete or reject jobs in `submitted`
+  status. Cannot complete jobs that aren't submitted, cannot drain
+  treasury. Bounded by `dailyCompleteLimit` (5000 USDC).
+- **DEPLOYER compromise (today):** worst case — can upgrade contracts
+  arbitrarily. Multisig + Timelock migration removes this SPoF.
+
+## SCORING_RULES_HASH commitment
+
+The reputation system's scoring methodology is committed at registry deploy:
+
+```solidity
+bytes32 public immutable scoringRulesHash;
+string  public scoringRulesURI;
+```
+
+Current values:
+
+- `scoringRulesHash`: `0xe23c8005889bb20bf2214f125f498ada9b7e81776af010c2fb21c5387a4f06c3`
+- `scoringRulesURI`: `https://cardzero.ai/SCORING-RULES.md`
+
+Any third party can verify:
+
+```bash
+curl -s https://cardzero.ai/SCORING-RULES.md > /tmp/scoring.md
+node -e "
+  const { keccak256, toBytes } = require('viem');
+  const fs = require('fs');
+  console.log(keccak256(toBytes(fs.readFileSync('/tmp/scoring.md', 'utf8'))));
+"
+# expected: 0xe23c8005889bb20bf2214f125f498ada9b7e81776af010c2fb21c5387a4f06c3
+```
+
+If on-chain and computed hashes diverge, either the document was modified
+post-commitment (would require an admin `updateScoringRules` tx to
+re-commit) or the deployment is on a different chain.
+
+## Sepolia full-lifecycle gate
+
+Every mainnet deploy is preceded by a Sepolia deploy of the same artifact,
+executing the full lifecycle that mainnet will exercise:
+
+For wallets: predict → deploy via first userOp → grantSessionKey →
+transfer USDC → verify on-chain state.
+
+For ERC-8004: register one agent via REGISTRAR → write one reputation event
+via ATTESTOR → verify `getReputation()` and `scoringRulesHash`.
+
+For ERC-8183 / CardZeroJobs: createJob → clientApprove → fund → submit →
+evaluatorComplete → verify provider/evaluator/treasury splits match
+`platformFeeBps` / `evaluatorFeeBps` → verify reputation auto-attestation.
+
+Mainnet deploy is gated on Sepolia smoke test ≥ 1 day old, self-check 6/6
+green, and founder review.
+
+This gate caught a `uint64` vs `uint256` `expiry` ABI bug during Sprint 9 —
+a function selector mismatch that would have caused silent reverts on
+mainnet. Fixed before mainnet deploy.
+
+## Multisig + Timelock migration (planned, pre-audit)
+
+**Current state:** `ADMIN_ROLE` on all four UUPS contracts (`CardZeroJobs`,
+`CardZeroIdentityRegistry`, `CardZeroReputationRegistry`,
+`CardZeroWalletV3` implementation upgrades) is held by `DEPLOYER` EOA.
+
+**Target state:**
+
+```
+DEPLOYER EOA  →  Safe (2-of-3, Base)  →  TimelockController (48h delay)  →  ADMIN_ROLE
+```
+
+**Why both, not just one:**
+
+- Safe alone, no timelock: removes single-key SPoF but allows surprise
+  upgrades. Community has no review window.
+- Timelock alone, no Safe: gives 48h review window but proposer is still a
+  single key. If compromised, attacker queues a malicious upgrade and waits.
+- Safe + Timelock: removes SPoF AND gives community review. Attacker needs
+  to compromise 2 of 3 signers AND wait 48h, during which the queued
+  upgrade is visible on-chain and revocable.
+
+**Sequence (per contract):**
+
+1. Deploy TimelockController on Base mainnet
+   (proposer = Safe, executor = Safe, delay = 172800s)
+2. From DEPLOYER: `contract.grantRole(ADMIN_ROLE, timelock)`
+3. Verify on Basescan: `contract.hasRole(ADMIN_ROLE, timelock) == true`
+4. Test: queue a no-op admin call via Safe → wait 48h → execute → verify
+5. From DEPLOYER: `contract.renounceRole(ADMIN_ROLE, deployer)`
+6. Verify on Basescan: `contract.hasRole(ADMIN_ROLE, deployer) == false`
+   AND `contract.getRoleMemberCount(ADMIN_ROLE) == 1`
+
+Each step is a separate tx, individually visible on Basescan, in this
+order. Step 5 is the **point of no return** — after `renounceRole`, only
+the Safe (through the timelock) can administer the contract.
+
+**Rollback options:**
+
+- Before Step 5: revert by `grantRole` back to deployer + `revokeRole(timelock)`.
+- After Step 5: rollback requires the Safe to queue a
+  `grantRole(ADMIN_ROLE, newKey)` tx through the timelock — same 48h window.
+
+## Post-deploy ops as separated transactions
+
+Operations that *could* be bundled but are intentionally separated:
+
+| Operation | Why separate |
+| --- | --- |
+| `Jobs.setReputationAttestor(reputationRegistry)` | Wires Jobs → Reputation. Done after Reputation has granted Jobs the `ATTESTOR_ROLE`. Independently reviewable. |
+| `Reputation.grantRole(ATTESTOR_ROLE, jobs)` | Allows Jobs to attest reputation on `finalizeJob`. Independently reviewable. |
+| Per-EOA role grants (`grantRole(REGISTRAR_ROLE, registrarEOA)`, etc.) | Each grant reviewed independently. |
+| `renounceRole(ADMIN_ROLE, deployer)` (after multisig migration) | Point of no return; deserves its own audit-trail entry. |
+
+Bundling into a multicall would shave gas but lose the per-step audit
+trail. We pay the gas premium.
+
+## Open invitations
+
+We welcome:
+
+- Auditor scoping reviews against this document
+  (`security@cardzero.ai`)
+- Peer-protocol comparisons: send your equivalent and we'll publish a
+  side-by-side
+- Issues filed against any of the linked commitments at
+  [github.com/mrocker/CardZero](https://github.com/mrocker/CardZero)
+- Patches to the salt computation, role isolation, or migration plan that
+  strengthen the model without breaking address determinism
+
+See also: [Contract addresses](/docs/reference/contract-addresses),
+[Changelog](/docs/reference/changelog).

@@ -98,6 +98,7 @@
         "reference/error-codes",
         "reference/rate-limits",
         "reference/contract-addresses",
+        "reference/deployment-ceremony",
         "reference/changelog"
       ]
     }
